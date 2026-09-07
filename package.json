@@ -23,10 +23,5 @@
   },
   "engines": {
     "node": ">=20"
-  },
-  "devDependencies": {
-    "@embedded-postgres/linux-x64": "^18.4.0-beta.17",
-    "embedded-postgres": "^18.4.0-beta.17",
-    "redis-memory-server": "^0.17.1"
   }
 }
