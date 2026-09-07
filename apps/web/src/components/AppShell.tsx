@@ -1,0 +1,77 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { api, ApiClientError } from '@/lib/api';
+import { Sidebar } from './Sidebar';
+import { Topbar } from './Topbar';
+import { LoadingState } from './EmptyState';
+
+type Me = {
+  user: { id: string; email: string; name: string; role: string };
+  pages: Array<{
+    pageId: string;
+    name: string;
+    profileImage?: string | null;
+    status: string;
+  }>;
+};
+
+const PAGE_KEY = 'pb_active_page';
+
+export function AppShell({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
+  const [me, setMe] = useState<Me | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [activePageId, setActivePageId] = useState<string | undefined>();
+
+  useEffect(() => {
+    api<Me>('/api/auth/me')
+      .then((data) => {
+        setMe(data);
+        const stored = typeof window !== 'undefined' ? sessionStorage.getItem(PAGE_KEY) : null;
+        const initial =
+          (stored && data.pages.some((p) => p.pageId === stored) && stored) ||
+          data.pages[0]?.pageId;
+        setActivePageId(initial);
+      })
+      .catch((err) => {
+        if (err instanceof ApiClientError && err.status === 401) {
+          router.replace('/login');
+        }
+      })
+      .finally(() => setLoading(false));
+  }, [router]);
+
+  function selectPage(id: string) {
+    setActivePageId(id);
+    sessionStorage.setItem(PAGE_KEY, id);
+  }
+
+  if (loading) return <LoadingState label="Loading workspace..." />;
+  if (!me) return null;
+
+  return (
+    <div className="flex min-h-screen bg-surface">
+      <Sidebar
+        pages={me.pages}
+        activePageId={activePageId}
+        onSelectPage={selectPage}
+        userName={me.user.name}
+        isAdmin={me.user.role === 'ADMIN'}
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
+      />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <Topbar
+          pages={me.pages}
+          activePageId={activePageId}
+          onSelectPage={selectPage}
+          onMenu={() => setMenuOpen(true)}
+        />
+        <main className="flex-1 p-4 md:p-6">{children}</main>
+      </div>
+    </div>
+  );
+}

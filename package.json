@@ -1,0 +1,32 @@
+{
+  "name": "pagebroadcast",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PageBroadcast — production SaaS for Facebook Page messaging and broadcasts",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspaces --if-present",
+    "dev:api": "npm run dev -w @pagebroadcast/api",
+    "dev:web": "npm run dev -w @pagebroadcast/web",
+    "dev:worker": "npm run dev -w @pagebroadcast/worker",
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:unit": "npm run test -w @pagebroadcast/api -- --runTestsByPath",
+    "db:generate": "npm run prisma:generate -w @pagebroadcast/api",
+    "db:migrate": "npm run prisma:migrate -w @pagebroadcast/api",
+    "db:seed": "npm run prisma:seed -w @pagebroadcast/api",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@embedded-postgres/linux-x64": "^18.4.0-beta.17",
+    "embedded-postgres": "^18.4.0-beta.17",
+    "redis-memory-server": "^0.17.1"
+  }
+}
