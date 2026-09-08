@@ -597,17 +597,32 @@ async function handleCampaignRun(job: Job) {
 
     try {
       const token = decryptSecret(cp.encryptedPageToken);
-      const created = await meta.createUtilityTemplate({
+      // Prefer listing an existing approved template before creating.
+      const listed = await meta.listMessageTemplates({
         pageId: cp.platformPageId,
         pageAccessToken: token,
         name: templateName,
-        category: 'UTILITY',
-        language,
-        body: templateBody,
-        exampleValues: utility.parameters?.length
-          ? utility.parameters
-          : [campaign.message || 'Example update'],
       });
+      const existing =
+        listed.find((t) => t.name === templateName) ||
+        listed.find((t) => t.name.toLowerCase() === templateName.toLowerCase());
+
+      const created = existing
+        ? {
+            externalTemplateId: existing.id || `utility_${templateName}`,
+            status: existing.status === 'UNKNOWN' ? ('APPROVED' as const) : existing.status,
+          }
+        : await meta.createUtilityTemplate({
+            pageId: cp.platformPageId,
+            pageAccessToken: token,
+            name: templateName,
+            category: 'UTILITY',
+            language,
+            body: templateBody,
+            exampleValues: utility.parameters?.length
+              ? utility.parameters
+              : [campaign.message || 'Example update'],
+          });
       await prisma.pageUtilityTemplate.upsert({
         where: {
           pageId_templateName_language: {
@@ -631,21 +646,30 @@ async function handleCampaignRun(job: Job) {
           body: templateBody,
         },
       });
-      const ready = created.status === 'APPROVED' || created.status === 'PENDING';
-      // Mock/Meta often APPROVED immediately; treat PENDING as usable after create for worker continuity when mock
+      const ready =
+        created.status === 'APPROVED' ||
+        created.status === 'PENDING' ||
+        Boolean(existing);
       await prisma.broadcastCampaignPage.update({
         where: { id: cp.id },
         data: {
           templateReady: ready,
           utilityTemplateName: templateName,
           status: 'ok',
+          lastError: null,
         },
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'template setup failed';
+      // Keep page usable for in-24h RESPONSE sends; Utility may still be missing.
       await prisma.broadcastCampaignPage.update({
         where: { id: cp.id },
-        data: { status: 'error', lastError: message, templateReady: false },
+        data: {
+          status: 'ok',
+          lastError: message,
+          templateReady: false,
+          utilityTemplateName: templateName,
+        },
       });
       await recordCampaignFailure(campaignId, 'template_setup', message, cp.pageId);
     }
@@ -874,7 +898,7 @@ async function handleCampaignSend(job: Job) {
     }
 
     let result: { messageId: string };
-    if (cp.templateReady || utility.name) {
+    if (cp.templateReady) {
       const params =
         templateName === PLAIN_UTILITY_TEMPLATE_NAME
           ? [campaign.message || 'Update']

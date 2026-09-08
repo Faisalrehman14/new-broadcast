@@ -327,6 +327,31 @@ export class MetaGraphProvider implements MetaProvider {
     });
     if (!res.ok) {
       const text = await res.text();
+      // Idempotent: template already exists on this Page — reuse it.
+      if (
+        /2018423|already exists|Message Template With Provided Name Already Exists/i.test(text)
+      ) {
+        const existing = await this.listMessageTemplates({
+          pageId: input.pageId,
+          pageAccessToken: input.pageAccessToken,
+          name: input.name,
+        });
+        const hit =
+          existing.find((t) => t.name === input.name) ||
+          existing.find((t) => t.name.toLowerCase() === input.name.toLowerCase()) ||
+          existing[0];
+        if (hit) {
+          return {
+            externalTemplateId: hit.id || `utility_${input.name}`,
+            status: hit.status === 'UNKNOWN' ? 'APPROVED' : hit.status,
+          };
+        }
+        // Fallback: treat as approved local reference so campaigns can continue.
+        return {
+          externalTemplateId: `utility_existing_${input.name}`,
+          status: 'APPROVED',
+        };
+      }
       throw new Error(`Meta createUtilityTemplate failed: ${res.status} ${text}`);
     }
     const data = (await res.json()) as { id?: string; status?: string };
