@@ -31,4 +31,39 @@ describe('classifyMetaSendError', () => {
     const c = classifyMetaSendError(err);
     assert.equal(c.retryable, true);
   });
+
+  it('treats 10/2018108 as unavailable, not outside window', () => {
+    const err = Object.assign(
+      new Error(
+        'Meta send failed: 400 {"error":{"message":"(#10) This Person Cannot Receive Messages","code":10,"error_subcode":2018108}}'
+      ),
+      { code: 10, subcode: 2018108, status: 400 }
+    );
+    const c = classifyMetaSendError(err);
+    assert.equal(c.kind, 'recipient_unavailable');
+    assert.equal(c.deactivateContact, true);
+  });
+
+  it('treats 10/2018278 as outside window', () => {
+    const err = Object.assign(
+      new Error(
+        'Meta send failed: 400 {"error":{"message":"(#10) This message is sent outside of allowed window.","code":10,"error_subcode":2018278}}'
+      ),
+      { code: 10, subcode: 2018278, status: 400 }
+    );
+    const c = classifyMetaSendError(err);
+    assert.equal(c.kind, 'outside_window');
+  });
+
+  it('treats bare code 10 permission as utility permission missing', () => {
+    const err = Object.assign(
+      new Error(
+        'Meta send failed: 400 {"error":{"message":"(#10) Application does not have permission for this action","code":10}}'
+      ),
+      { code: 10, status: 400 }
+    );
+    const c = classifyMetaSendError(err);
+    assert.equal(c.kind, 'permission');
+    assert.equal(c.reason, 'utility_permission_missing');
+  });
 });

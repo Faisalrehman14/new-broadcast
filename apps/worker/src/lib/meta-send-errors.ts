@@ -22,6 +22,9 @@ export type ClassifiedMetaSendError = {
   deactivateContact: boolean;
 };
 
+/** True 24h / policy window subcodes (not bare code 10). */
+const WINDOW_SUBCODES = new Set([2018278, 2018065, 2534022]);
+
 function parseGraphPayload(raw: string): { code?: number; subcode?: number; message?: string } {
   try {
     const jsonStart = raw.indexOf('{');
@@ -57,6 +60,7 @@ export function classifyMetaSendError(err: unknown): ClassifiedMetaSendError {
   const code = e.code ?? e.errorCode ?? fromJson.code;
   const subcode = e.subcode ?? e.errorSubcode ?? fromJson.subcode;
   const http = e.status;
+  const blob = `${fromJson.message || ''} ${text}`.toLowerCase();
 
   // Rate / transient platform
   if (
@@ -95,38 +99,39 @@ export function classifyMetaSendError(err: unknown): ClassifiedMetaSendError {
     };
   }
 
-  // Blocked / deactivated / not receiving messages
+  // Blocked / deactivated / not receiving (incl. 10/2018108 — NOT the messaging window)
   if (
     code === 551 ||
-    code === 200 ||
     subcode === 1545041 ||
     subcode === 1893047 ||
-    /isn'?t available right now|isn'?t receiving messages|recipient not available/i.test(text)
+    subcode === 2018108 ||
+    /isn'?t available right now|isn'?t receiving messages|recipient not available|cannot receive messages|can'?t receive your messages/i.test(
+      blob
+    )
   ) {
     return {
       kind: 'recipient_unavailable',
       code,
       subcode,
       reason: 'recipient_unavailable',
-      message: 'Recipient unavailable (blocked, deactivated, or not accepting messages).',
+      message: 'Recipient unavailable (blocked, muted, filtered, or not accepting messages).',
       retryable: false,
       deactivateContact: true,
     };
   }
 
-  // 24h / policy window
+  // True 24h / policy window — subcode-first (bare code 10 is overloaded)
   if (
-    code === 10 ||
-    subcode === 2018108 ||
-    subcode === 2018028 ||
-    /outside.*allowed window|cannot message this person|messaging window/i.test(text)
+    (subcode !== undefined && WINDOW_SUBCODES.has(subcode)) ||
+    /outside of allowed window|outside.*messaging window|24.?hour window/i.test(blob)
   ) {
     return {
       kind: 'outside_window',
       code,
       subcode,
       reason: 'outside_window',
-      message: 'Outside messaging window and UTILITY could not deliver.',
+      message:
+        'Outside the 24h messaging window — UTILITY template did not deliver. Reconnect Facebook, grant Utility Messaging for this Page, and confirm the template is APPROVED.',
       retryable: false,
       deactivateContact: false,
     };
@@ -144,13 +149,21 @@ export function classifyMetaSendError(err: unknown): ClassifiedMetaSendError {
     };
   }
 
-  if (code === 200 || /permission|pages_messaging|utility/i.test(text)) {
+  // Missing pages_utility_messaging / app permission (often bare Graph #10)
+  if (
+    code === 10 ||
+    code === 200 ||
+    /pages_utility_messaging|application does not have permission|permission.*does not have|pages_messaging/i.test(
+      blob
+    )
+  ) {
     return {
       kind: 'permission',
       code,
       subcode,
-      reason: 'permission_denied',
-      message: 'Meta permission denied for this send.',
+      reason: 'utility_permission_missing',
+      message:
+        'Missing Utility Messaging permission for this Page. Reconnect Facebook, select this Page in the picker, and approve pages_utility_messaging.',
       retryable: false,
       deactivateContact: false,
     };

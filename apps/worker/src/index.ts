@@ -618,6 +618,9 @@ async function handleCampaignRun(job: Job) {
         listed.find((t) => t.name === templateName) ||
         listed.find((t) => t.name.toLowerCase() === templateName.toLowerCase());
 
+      // Prefer Meta's stored language (often `en`) over campaign default `en_US`.
+      const resolvedLanguage = existing?.language || language;
+
       let created = existing
         ? {
             externalTemplateId: existing.id || `utility_${templateName}`,
@@ -628,7 +631,7 @@ async function handleCampaignRun(job: Job) {
             pageAccessToken: token,
             name: templateName,
             category: 'UTILITY',
-            language,
+            language: resolvedLanguage,
             body: templateBody,
             exampleValues: utility.parameters?.length
               ? utility.parameters
@@ -661,13 +664,13 @@ async function handleCampaignRun(job: Job) {
           pageId_templateName_language: {
             pageId: cp.pageId,
             templateName,
-            language,
+            language: resolvedLanguage,
           },
         },
         create: {
           pageId: cp.pageId,
           templateName,
-          language,
+          language: resolvedLanguage,
           externalId: created.externalTemplateId,
           status: created.status === 'APPROVED' ? 'APPROVED' : created.status === 'REJECTED' ? 'REJECTED' : 'PENDING',
           body: templateBody,
@@ -693,6 +696,20 @@ async function handleCampaignRun(job: Job) {
               : 'UTILITY template still pending Meta review',
         },
       });
+      // Keep campaign JSON language aligned with Meta-approved template.
+      if (ready && resolvedLanguage !== language) {
+        await prisma.broadcastCampaign.update({
+          where: { id: campaignId },
+          data: {
+            utilityTemplate: {
+              ...utility,
+              name: templateName,
+              body: templateBody,
+              language: resolvedLanguage,
+            },
+          },
+        });
+      }
       if (!ready) {
         await recordCampaignFailure(
           campaignId,
@@ -913,6 +930,15 @@ async function handleCampaignSend(job: Job) {
     parameters?: string[];
   };
   const templateName = cp.utilityTemplateName || utility.name || PLAIN_UTILITY_TEMPLATE_NAME;
+  const storedTpl = await prisma.pageUtilityTemplate.findFirst({
+    where: {
+      pageId: cp.pageId,
+      templateName,
+      status: 'APPROVED',
+    },
+    orderBy: { updatedAt: 'desc' },
+  });
+  const templateLanguage = storedTpl?.language || utility.language || 'en_US';
   const within24h =
     recipient.lastInteractionAt &&
     Date.now() - new Date(recipient.lastInteractionAt).getTime() <= MS_24H;
@@ -967,7 +993,7 @@ async function handleCampaignSend(job: Job) {
           pageAccessToken: token,
           recipientPsid: recipient.psid,
           templateName,
-          languageCode: utility.language || 'en_US',
+          languageCode: templateLanguage,
           bodyParameters: params.length ? params : [personalized],
           idempotencyKey: recipient.idempotencyKey,
         });

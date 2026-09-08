@@ -249,32 +249,50 @@ export class MetaGraphProvider implements MetaProvider {
   }
 
   async sendUtilityMessage(input: MetaSendUtilityInput): Promise<MetaSendResult> {
-    const message = {
-      template: {
-        name: input.templateName,
-        language: { code: input.languageCode || 'en_US' },
-        components: input.bodyParameters.length
-          ? [
-              {
-                type: 'body',
-                parameters: input.bodyParameters.map((text) => ({
-                  type: 'text',
-                  text: String(text).slice(0, 1000),
-                })),
-              },
-            ]
-          : [],
-      },
-    };
-    // Reference Messenger tools use form-urlencoded for UTILITY campaign sends.
-    return this.postMessageForm(
-      input.pageId,
-      input.pageAccessToken,
-      input.recipientPsid,
-      message,
-      'UTILITY',
-      input.idempotencyKey
+    const components = input.bodyParameters.length
+      ? [
+          {
+            type: 'body',
+            parameters: input.bodyParameters.map((text) => ({
+              type: 'text',
+              text: String(text).slice(0, 1000),
+            })),
+          },
+        ]
+      : [];
+    // Meta may store the template as `en` or `en_US` — try both (reference campaign engine).
+    const langs = Array.from(
+      new Set([input.languageCode || 'en_US', 'en_US', 'en'].filter(Boolean).map(String))
     );
+    let lastErr: unknown;
+    for (const lang of langs) {
+      const message = {
+        template: {
+          name: input.templateName,
+          language: { code: lang },
+          components,
+        },
+      };
+      try {
+        // Reference Messenger tools use form-urlencoded for UTILITY campaign sends.
+        return await this.postMessageForm(
+          input.pageId,
+          input.pageAccessToken,
+          input.recipientPsid,
+          message,
+          'UTILITY',
+          input.idempotencyKey
+        );
+      } catch (err) {
+        lastErr = err;
+        const text = err instanceof Error ? err.message : String(err);
+        // Hard stop on token / rate — do not burn other languages.
+        if (/190|OAuthException|session has expired|rate limit|code.: ?4\b|code.: ?17\b/i.test(text)) {
+          throw err;
+        }
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr || 'UTILITY send failed'));
   }
 
   async sendResponseMessage(input: MetaSendResponseInput): Promise<MetaSendResult> {
@@ -539,8 +557,12 @@ export class MetaGraphProvider implements MetaProvider {
     idempotencyKey: string,
     tag?: string
   ): Promise<MetaSendResult> {
+    // Business Suite / inbox ids sometimes prefix with t_
+    const recipientId = String(recipientPsid || '')
+      .trim()
+      .replace(/^t_/, '');
     const form = new URLSearchParams();
-    form.append('recipient', JSON.stringify({ id: recipientPsid }));
+    form.append('recipient', JSON.stringify({ id: recipientId }));
     form.append('message', JSON.stringify(message));
     form.append('messaging_type', messagingType);
     form.append('access_token', pageAccessToken);
@@ -563,7 +585,7 @@ export class MetaGraphProvider implements MetaProvider {
     }
     return {
       messageId: data.message_id || idempotencyKey,
-      recipientId: data.recipient_id || recipientPsid,
+      recipientId: data.recipient_id || recipientId,
     };
   }
 }
