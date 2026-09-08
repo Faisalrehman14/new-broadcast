@@ -71,7 +71,8 @@ export async function facebookRoutes(app: FastifyInstance) {
       try {
         fbUser = await metaProvider.getAuthorizedUser(token.accessToken);
       } catch (profileErr) {
-        // Reconnect resilience: if /me fails but token can list Pages, reuse existing FB account id.
+        // Reconnect resilience: /me + public_profile can fail after Business Login;
+        // still persist the new token onto an existing FacebookAccount when possible.
         logger.warn(
           { err: profileErr, requestId: request.id },
           'facebook /me failed; trying reconnect fallback'
@@ -86,8 +87,23 @@ export async function facebookRoutes(app: FastifyInstance) {
         } catch {
           pages = [];
         }
-        if (existing && pages.length > 0) {
+
+        if (existing) {
+          // Prefer known app-scoped id even when Page picker returned empty.
           fbUser = { id: existing.platformUserId, name: 'Facebook User' };
+          logger.info(
+            {
+              requestId: request.id,
+              platformUserId: existing.platformUserId,
+              pageCount: pages.length,
+            },
+            'facebook reconnect fallback used existing account'
+          );
+        } else if (pages.length > 0) {
+          // Brand-new connect without /me: cannot invent a stable Facebook user id.
+          throw new Error(
+            'Meta getAuthorizedUser failed: could not resolve Facebook user id (public_profile / debug_token). Reconnect as App admin/tester and approve public_profile.'
+          );
         } else {
           throw profileErr;
         }

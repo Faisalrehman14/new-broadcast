@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import {
   META_OAUTH_SCOPES,
   resolveMetaOAuthScopes,
@@ -24,6 +25,18 @@ export class MetaGraphProvider implements MetaProvider {
 
   private base(): string {
     return `https://graph.facebook.com/${this.config.graphVersion}`;
+  }
+
+  /** Required when Meta Advanced → "Require App Secret" is on. */
+  private appSecretProof(accessToken: string): string | null {
+    if (!this.config.appSecret || !accessToken) return null;
+    return createHmac('sha256', this.config.appSecret).update(accessToken).digest('hex');
+  }
+
+  private withProof(params: URLSearchParams, accessToken: string) {
+    const proof = this.appSecretProof(accessToken);
+    if (proof) params.set('appsecret_proof', proof);
+    return params;
   }
 
   /** Login dialog version can be newer than Graph calls (reference uses v25). */
@@ -125,10 +138,13 @@ export class MetaGraphProvider implements MetaProvider {
     const attempts = ['id,name', 'id'] as const;
     let lastErr = '';
     for (const fields of attempts) {
-      const params = new URLSearchParams({
-        fields,
-        access_token: userAccessToken,
-      });
+      const params = this.withProof(
+        new URLSearchParams({
+          fields,
+          access_token: userAccessToken,
+        }),
+        userAccessToken
+      );
       const res = await fetch(`${this.base()}/me?${params}`);
       const raw = await res.text();
       if (res.ok) {
@@ -174,10 +190,11 @@ export class MetaGraphProvider implements MetaProvider {
         };
       };
       const userId = parsed.data?.user_id;
-      if (!parsed.data?.is_valid || userId == null) return null;
+      // Accept user_id even when is_valid is momentarily false after long-lived exchange.
+      if (userId == null) return null;
       return {
         userId: String(userId),
-        scopes: parsed.data.scopes || [],
+        scopes: parsed.data?.scopes || [],
       };
     } catch {
       return null;
@@ -185,11 +202,14 @@ export class MetaGraphProvider implements MetaProvider {
   }
 
   async getPages(userAccessToken: string): Promise<MetaPageSummary[]> {
-    const params = new URLSearchParams({
-      fields: 'id,name,access_token,category,tasks,picture{url}',
-      access_token: userAccessToken,
-      limit: '100',
-    });
+    const params = this.withProof(
+      new URLSearchParams({
+        fields: 'id,name,access_token,category,tasks,picture{url}',
+        access_token: userAccessToken,
+        limit: '100',
+      }),
+      userAccessToken
+    );
     const res = await fetch(`${this.base()}/me/accounts?${params}`);
     if (!res.ok) throw new Error(`Meta getPages failed: ${res.status}`);
     const data = (await res.json()) as {

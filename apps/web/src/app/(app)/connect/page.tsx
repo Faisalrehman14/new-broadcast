@@ -21,7 +21,7 @@ const ERROR_COPY: Record<string, string> = {
   long_lived:
     'Long-lived token exchange failed — usually wrong META_APP_SECRET. Fix the secret, redeploy API, then reconnect.',
   profile:
-    'Could not read your Facebook profile after login. Ensure the Meta app includes public_profile, you are an App admin/tester (if app is in Development), then reconnect.',
+    'Could not finish Facebook login (profile id missing). Click Connect again, select your Business, tick every Page, allow all permissions including public_profile, then Continue — do not Cancel. If the app is in Development mode, your Facebook user must be an App admin/tester.',
   config: 'Server encryption/config error. Check ENCRYPTION_KEY on the API service.',
   facebook:
     'Facebook connect failed. Check META_APP_ID, META_APP_SECRET, META_REDIRECT_URI, and Meta Valid OAuth Redirect URIs, then reconnect.',
