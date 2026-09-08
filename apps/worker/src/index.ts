@@ -12,6 +12,10 @@ import { PrismaClient } from '@prisma/client';
 import { personalizeBroadcastMessage } from './lib/personalize.js';
 import { acquirePageSendSlot } from './lib/send-gate.js';
 import { classifyMetaSendError } from './lib/meta-send-errors.js';
+import {
+  assessPageUtilityEligibility,
+  PAGE_UTILITY_PICKER_MESSAGE,
+} from './lib/page-utility-health.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
@@ -682,6 +686,63 @@ async function refundQuota(userId: string, units: number): Promise<void> {
   });
 }
 
+/**
+ * Stop outside-24h UTILITY sends on a Page that cannot deliver Utility Messaging.
+ * Keep status=ok so in-window RESPONSE sends continue; other Pages keep running.
+ */
+async function abortPageUtilityBlocked(params: {
+  campaignId: string;
+  campaignPageId: string;
+  pageId: string;
+  pageName?: string | null;
+  reason: string;
+  message: string;
+}) {
+  const msg = params.message.slice(0, 500);
+  await prisma.broadcastCampaignPage.update({
+    where: { id: params.campaignPageId },
+    data: {
+      templateReady: false,
+      lastError: msg,
+    },
+  });
+  const cutoff = new Date(Date.now() - MS_24H);
+  const pending = await prisma.broadcastCampaignRecipient.findMany({
+    where: {
+      campaignPageId: params.campaignPageId,
+      status: { in: ['PENDING', 'RETRYING'] },
+      OR: [{ lastInteractionAt: null }, { lastInteractionAt: { lt: cutoff } }],
+    },
+    select: { id: true },
+  });
+  if (pending.length) {
+    await prisma.$transaction([
+      prisma.broadcastCampaignRecipient.updateMany({
+        where: { id: { in: pending.map((p) => p.id) } },
+        data: {
+          status: 'SKIPPED',
+          failureReason: params.reason,
+          failedAt: new Date(),
+        },
+      }),
+      prisma.broadcastCampaign.update({
+        where: { id: params.campaignId },
+        data: {
+          skippedCount: { increment: pending.length },
+          queuedCount: { decrement: pending.length },
+        },
+      }),
+    ]);
+  }
+  await recordCampaignFailure(
+    params.campaignId,
+    params.reason,
+    `${params.pageName || 'Page'}: ${msg}`,
+    params.pageId
+  );
+  await maybeFinalizeCampaign(params.campaignId);
+}
+
 async function handleCampaignRun(job: Job) {
   const { campaignId } = job.data as { campaignId: string };
   const campaign = await prisma.broadcastCampaign.findUnique({
@@ -814,7 +875,51 @@ async function handleCampaignRun(job: Job) {
           body: templateBody,
         },
       });
-      const ready = created.status === 'APPROVED';
+      const readyApproved = created.status === 'APPROVED';
+      let ready = readyApproved;
+      let utilityBlockReason: string | null = null;
+
+      // Reference: verify picker / utility grant before marking the Page ready for outside-24h.
+      if (readyApproved) {
+        try {
+          const pageRow = await prisma.facebookPage.findUnique({
+            where: { id: cp.pageId },
+            include: { facebookAccount: true },
+          });
+          const userTok = pageRow?.facebookAccount?.encryptedAccessToken
+            ? decryptSecret(pageRow.facebookAccount.encryptedAccessToken)
+            : null;
+          const elig = await assessPageUtilityEligibility({
+            graphVersion: config.META_GRAPH_VERSION,
+            appId: config.META_APP_ID,
+            appSecret: config.META_APP_SECRET,
+            userAccessToken: userTok,
+            platformPageId: cp.platformPageId,
+            pageAccessToken: token,
+          });
+          if (elig.pageTokenFromAccounts) {
+            const encrypted = encryptSecret(elig.pageTokenFromAccounts);
+            remintedPageTokens.set(cp.id, { token: elig.pageTokenFromAccounts, at: Date.now() });
+            await prisma.$transaction([
+              prisma.broadcastCampaignPage.update({
+                where: { id: cp.id },
+                data: { encryptedPageToken: encrypted },
+              }),
+              prisma.facebookPage.update({
+                where: { id: cp.pageId },
+                data: { encryptedPageToken: encrypted },
+              }),
+            ]);
+          }
+          if (elig.eligible === false) {
+            ready = false;
+            utilityBlockReason = elig.reason || PAGE_UTILITY_PICKER_MESSAGE;
+          }
+        } catch (eligErr) {
+          logger.warn({ err: eligErr, pageId: cp.pageId }, 'utility eligibility check skipped');
+        }
+      }
+
       await prisma.broadcastCampaignPage.update({
         where: { id: cp.id },
         data: {
@@ -823,9 +928,11 @@ async function handleCampaignRun(job: Job) {
           status: 'ok',
           lastError: ready
             ? null
-            : created.status === 'REJECTED'
-              ? 'UTILITY template rejected by Meta'
-              : 'UTILITY template still pending Meta review',
+            : utilityBlockReason
+              ? utilityBlockReason
+              : created.status === 'REJECTED'
+                ? 'UTILITY template rejected by Meta'
+                : 'UTILITY template still pending Meta review',
         },
       });
       // Do NOT rewrite campaign-level language from one Page — other Pages keep their own
@@ -833,10 +940,15 @@ async function handleCampaignRun(job: Job) {
       if (!ready) {
         await recordCampaignFailure(
           campaignId,
-          created.status === 'REJECTED' ? 'template_rejected' : 'template_pending',
-          created.status === 'REJECTED'
-            ? `UTILITY template rejected on ${cp.pageName}`
-            : `UTILITY template not APPROVED yet on ${cp.pageName} — outside-24h sends will fail until approved`,
+          utilityBlockReason
+            ? 'utility_permission_missing'
+            : created.status === 'REJECTED'
+              ? 'template_rejected'
+              : 'template_pending',
+          utilityBlockReason ||
+            (created.status === 'REJECTED'
+              ? `UTILITY template rejected on ${cp.pageName}`
+              : `UTILITY template not APPROVED yet on ${cp.pageName} — outside-24h sends will fail until approved`),
           cp.pageId
         );
       }
@@ -1022,10 +1134,12 @@ async function handleCampaignSend(job: Job) {
   if (!recipient || ['SENT', 'FAILED', 'SKIPPED'].includes(recipient.status)) return;
 
   const cp = recipient.campaignPage;
-  if (cp.status !== 'ok' || !cp.encryptedPageToken) {
+  // Page already aborted (missing utility / picker) or missing token — skip without failing the campaign.
+  if (cp.status === 'error' || cp.status !== 'ok' || !cp.encryptedPageToken) {
+    const reason = cp.status === 'error' ? 'utility_page_blocked' : 'no_token';
     await prisma.broadcastCampaignRecipient.update({
       where: { id: recipientId },
-      data: { status: 'SKIPPED', failureReason: 'no_token' },
+      data: { status: 'SKIPPED', failureReason: reason },
     });
     await prisma.broadcastCampaign.update({
       where: { id: campaignId },
@@ -1039,6 +1153,25 @@ async function handleCampaignSend(job: Job) {
     where: { id: recipientId },
     data: { status: 'SENDING', attemptCount: { increment: 1 } },
   });
+
+  // Re-read page row — another job may have cleared templateReady after a utility abort.
+  const cpFresh = await prisma.broadcastCampaignPage.findUnique({ where: { id: cp.id } });
+  if (!cpFresh || cpFresh.status === 'error' || cpFresh.status !== 'ok' || !cpFresh.encryptedPageToken) {
+    await prisma.broadcastCampaignRecipient.update({
+      where: { id: recipientId },
+      data: {
+        status: 'SKIPPED',
+        failureReason: cpFresh?.status === 'error' ? 'utility_page_blocked' : 'no_token',
+      },
+    });
+    await prisma.broadcastCampaign.update({
+      where: { id: campaignId },
+      data: { skippedCount: { increment: 1 }, queuedCount: { decrement: 1 } },
+    });
+    await maybeFinalizeCampaign(campaignId);
+    return;
+  }
+  Object.assign(cp, cpFresh);
 
   const quotaUnits = campaign.imageUrl || campaign.attachmentId ? 2 : 1;
   const reserved = await assertAndConsumeQuota(campaign.userId, quotaUnits);
@@ -1095,8 +1228,19 @@ async function handleCampaignSend(job: Job) {
     const token = await resolveCampaignPageToken(cp);
 
     let result: { messageId: string };
-    if (cp.templateReady) {
-      // Prefer UTILITY first (reference Messenger tools) — not RESPONSE-first.
+    // Reference-style: in-window always uses RESPONSE (works without Utility Messaging).
+    // Outside 24h only when this Page is templateReady + eligible.
+    if (within24h) {
+      result = await meta.sendResponseMessage({
+        pageId: cp.platformPageId,
+        pageAccessToken: token,
+        recipientPsid: recipient.psid,
+        text: personalized || undefined,
+        imageUrl: campaign.imageUrl || undefined,
+        attachmentId: campaign.attachmentId || undefined,
+        idempotencyKey: recipient.idempotencyKey,
+      });
+    } else if (cp.templateReady) {
       const params =
         templateName === PLAIN_UTILITY_TEMPLATE_NAME
           ? [personalized]
@@ -1122,64 +1266,45 @@ async function handleCampaignSend(job: Job) {
           idempotencyKey: recipient.idempotencyKey,
         });
       } catch (utilErr) {
-        // In-window fallback only — matches reference campaign-engine.
-        if (!within24h) {
-          const wrapped = Object.assign(
-            new Error(
-              `UTILITY send failed outside 24h window: ${utilErr instanceof Error ? utilErr.message : String(utilErr)}`
-            ),
-            utilErr instanceof Error
-              ? {
-                  status: (utilErr as Error & { status?: number }).status,
-                  code: (utilErr as Error & { code?: number }).code,
-                  subcode: (utilErr as Error & { subcode?: number }).subcode,
-                  retryable: (utilErr as Error & { retryable?: boolean }).retryable,
-                }
-              : {}
-          );
-          throw wrapped;
-        }
-        result = await meta.sendResponseMessage({
-          pageId: cp.platformPageId,
-          pageAccessToken: token,
-          recipientPsid: recipient.psid,
-          text: personalized || undefined,
-          imageUrl: campaign.imageUrl || undefined,
-          attachmentId: campaign.attachmentId || undefined,
-          idempotencyKey: `${recipient.idempotencyKey}:resp`,
-        });
+        const wrapped = Object.assign(
+          new Error(
+            `UTILITY send failed outside 24h window: ${utilErr instanceof Error ? utilErr.message : String(utilErr)}`
+          ),
+          utilErr instanceof Error
+            ? {
+                status: (utilErr as Error & { status?: number }).status,
+                code: (utilErr as Error & { code?: number }).code,
+                subcode: (utilErr as Error & { subcode?: number }).subcode,
+                retryable: (utilErr as Error & { retryable?: boolean }).retryable,
+              }
+            : {}
+        );
+        throw wrapped;
       }
-    } else if (within24h) {
-      result = await meta.sendResponseMessage({
-        pageId: cp.platformPageId,
-        pageAccessToken: token,
-        recipientPsid: recipient.psid,
-        text: personalized || undefined,
-        imageUrl: campaign.imageUrl || undefined,
-        attachmentId: campaign.attachmentId || undefined,
-        idempotencyKey: recipient.idempotencyKey,
-      });
     } else {
       await refundQuota(campaign.userId, quotaUnits);
       await prisma.broadcastCampaignRecipient.update({
         where: { id: recipientId },
         data: {
-          status: 'FAILED',
+          status: 'SKIPPED',
           failedAt: new Date(),
           failureReason: 'outside_24h_no_utility',
         },
       });
       await prisma.broadcastCampaign.update({
         where: { id: campaignId },
-        data: { failedCount: { increment: 1 }, queuedCount: { decrement: 1 } },
+        data: { skippedCount: { increment: 1 }, queuedCount: { decrement: 1 } },
       });
-      await recordCampaignFailure(
-        campaignId,
-        'outside_24h_no_utility',
-        'Recipient outside 24h window and UTILITY template not ready',
-        cp.pageId,
-        recipient.psid
-      );
+      // One sample per wave — don't flood; other Pages continue.
+      if (Math.random() < 0.02) {
+        await recordCampaignFailure(
+          campaignId,
+          'outside_24h_no_utility',
+          'Recipient outside 24h and UTILITY not ready on this Page',
+          cp.pageId,
+          recipient.psid
+        );
+      }
       await maybeFinalizeCampaign(campaignId);
       return;
     }
@@ -1218,12 +1343,6 @@ async function handleCampaignSend(job: Job) {
         message:
           'Meta rejected UTILITY for this Page outside 24h. Reconnect Facebook, select this Page in the picker, grant Utility Messaging, confirm template APPROVED (en/en_US).',
       };
-      await prisma.broadcastCampaignPage.update({
-        where: { id: cp.id },
-        data: {
-          lastError: classified.message,
-        },
-      });
     }
 
     if (classified.retryable) {
@@ -1272,6 +1391,38 @@ async function handleCampaignSend(job: Job) {
         );
       }
       await maybeFinalizeCampaign(campaignId);
+      return;
+    }
+
+    // Page-level UTILITY block — abort remaining on this Page only; other Pages keep sending.
+    const pageUtilityBlocked =
+      classified.reason === 'utility_window_rejected' ||
+      classified.reason === 'utility_permission_missing' ||
+      classified.kind === 'permission';
+
+    if (pageUtilityBlocked) {
+      await prisma.$transaction([
+        prisma.broadcastCampaignRecipient.update({
+          where: { id: recipientId },
+          data: {
+            status: 'SKIPPED',
+            failedAt: new Date(),
+            failureReason: classified.reason,
+          },
+        }),
+        prisma.broadcastCampaign.update({
+          where: { id: campaignId },
+          data: { skippedCount: { increment: 1 }, queuedCount: { decrement: 1 } },
+        }),
+      ]);
+      await abortPageUtilityBlocked({
+        campaignId,
+        campaignPageId: cp.id,
+        pageId: cp.pageId,
+        pageName: cp.pageName,
+        reason: classified.reason,
+        message: classified.message || PAGE_UTILITY_PICKER_MESSAGE,
+      });
       return;
     }
 

@@ -1,5 +1,6 @@
 import {
   META_OAUTH_SCOPES,
+  resolveMetaOAuthScopes,
   type MetaAuthorizedUser,
   type MetaContact,
   type MetaPageSummary,
@@ -25,19 +26,29 @@ export class MetaGraphProvider implements MetaProvider {
     return `https://graph.facebook.com/${this.config.graphVersion}`;
   }
 
+  /** Login dialog version can be newer than Graph calls (reference uses v25). */
+  private oauthDialogVersion(): string {
+    const fromEnv = String(process.env.META_OAUTH_DIALOG_VERSION || '').trim();
+    const raw = fromEnv || 'v25.0';
+    return raw.startsWith('v') ? raw : `v${raw}`;
+  }
+
   getOAuthUrl(state: string, redirectUri: string, options?: { rerequest?: boolean }): string {
     const params = new URLSearchParams({
       client_id: this.config.appId,
       redirect_uri: redirectUri,
       state,
-      scope: META_OAUTH_SCOPES.join(','),
+      scope: resolveMetaOAuthScopes().join(','),
       response_type: 'code',
+      display: 'page',
     });
     // Reconnect / missing Utility Messaging — force Meta permission dialog again.
     if (options?.rerequest !== false) {
       params.set('auth_type', 'rerequest');
     }
-    return `https://www.facebook.com/${this.config.graphVersion}/dialog/oauth?${params}`;
+    // Classic Facebook Login (scopes). Do NOT pass config_id — that forces Login for Business
+    // and often ends on /dialog/oauth/business/cancel with empty selected_business_id.
+    return `https://www.facebook.com/${this.oauthDialogVersion()}/dialog/oauth?${params}`;
   }
 
   async exchangeCodeForToken(code: string, redirectUri: string) {

@@ -49,7 +49,11 @@ export async function facebookRoutes(app: FastifyInstance) {
     const q = request.query as { code?: string; state?: string; error?: string; error_description?: string };
     if (q.error) {
       logger.warn({ error: q.error, desc: q.error_description }, 'facebook oauth denied');
-      return reply.redirect(`${config.APP_URL}/connect?error=denied`);
+      const denied =
+        /access_denied|user_denied|cancelled|canceled/i.test(`${q.error} ${q.error_description || ''}`)
+          ? 'denied'
+          : 'facebook';
+      return reply.redirect(`${config.APP_URL}/connect?error=${denied}`);
     }
     const expected = request.cookies[OAUTH_STATE_COOKIE];
     if (!q.code || !q.state || !expected || q.state !== expected) {

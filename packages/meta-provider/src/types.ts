@@ -176,3 +176,18 @@ export const META_OAUTH_SCOPES = [
   'pages_utility_messaging',
   'business_management',
 ] as const;
+
+/** Runtime OAuth scopes — allow Railway override / exclude Business Login trap. */
+export function resolveMetaOAuthScopes(env: NodeJS.ProcessEnv = process.env): string[] {
+  const raw = String(env.META_OAUTH_SCOPES || '').trim();
+  if (raw) {
+    return raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  const excludeBusiness = /^(1|true|yes|on)$/i.test(
+    String(env.META_OAUTH_EXCLUDE_BUSINESS || '').trim()
+  );
+  return META_OAUTH_SCOPES.filter((s) => !(excludeBusiness && s === 'business_management'));
+}

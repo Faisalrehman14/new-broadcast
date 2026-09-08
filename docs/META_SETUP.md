@@ -67,7 +67,9 @@ Then subscribe your Page to the app.
 | `META_PROVIDER` | `meta` |
 | `META_APP_ID` | your App ID |
 | `META_APP_SECRET` | your App Secret |
-| `META_GRAPH_VERSION` | `v21.0` |
+| `META_GRAPH_VERSION` | `v21.0` (Graph API calls) |
+| `META_OAUTH_DIALOG_VERSION` | `v25.0` (Login dialog — optional; defaults to v25.0) |
+| `META_OAUTH_EXCLUDE_BUSINESS` | `1` only if Business Login cancel loops; drops `business_management` |
 | `META_WEBHOOK_VERIFY_TOKEN` | long random string (same as Meta webhook verify token) |
 | `META_REDIRECT_URI` | `https://pagebroadcastweb-production.up.railway.app/api/facebook/callback` (must match Meta Valid OAuth Redirect URIs **exactly**) |
 | `APP_URL` | `https://pagebroadcastweb-production.up.railway.app` |

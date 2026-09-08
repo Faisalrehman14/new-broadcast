@@ -8,7 +8,7 @@ import { BrandLogo } from '@/components/BrandLogo';
 
 const ERROR_COPY: Record<string, string> = {
   denied:
-    'Facebook authorization was cancelled. Try again and approve all requested Pages + Utility Messaging.',
+    'Facebook authorization was cancelled (or Business Login finished without a business selected). Click Connect again → choose your Business → tick EVERY Page you send from → enable Utility Messaging → Continue (do not Cancel).',
   invalid_state: 'Your connect session expired. Click Connect Facebook again.',
   expired:
     'Your stored Facebook access token is invalid. Click Connect Facebook again and approve all permissions.',
@@ -51,6 +51,15 @@ function ConnectInner() {
               {errMsg}
             </div>
           ) : null}
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+            <p className="font-medium text-slate-900">If Facebook shows Business / Page checkboxes</p>
+            <ol className="mt-2 list-decimal space-y-1 pl-5">
+              <li>Select your Business (do not leave it empty).</li>
+              <li>Tick every Page you broadcast from (e.g. Dragon House + Patrick).</li>
+              <li>Allow Utility Messaging / pages_utility_messaging.</li>
+              <li>Click Continue — never Cancel (Cancel lands on facebook.com/…/oauth/business/cancel).</li>
+            </ol>
+          </div>
           <ul className="space-y-2 text-sm text-slate-600">
             <li>• OAuth with Facebook (rerequest Utility Messaging)</li>
             <li>• Long-lived user token stored encrypted</li>
