@@ -54,7 +54,12 @@ export function mergeStarters(
   // Prefer full local/reference catalog when API response is thinner/older
   const ids = new Set(merged.map((m) => m.id));
   for (const s of STARTER_COPY) {
-    if (!ids.has(s.id)) merged.push(s);
+    if (!ids.has(s.id)) {
+      merged.push({
+        ...s,
+        instant: Boolean(s.instant),
+      });
+    }
   }
   // Instant presets first in the library
   merged.sort((a, b) => Number(Boolean(b.instant)) - Number(Boolean(a.instant)));
