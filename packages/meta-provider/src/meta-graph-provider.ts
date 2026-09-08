@@ -337,6 +337,8 @@ export class MetaGraphProvider implements MetaProvider {
         ]
       : [];
     // Meta may store the template as `en` or `en_US` — try both (reference campaign engine).
+    // IMPORTANT: Do NOT abort on bare "OAuthException" — Meta puts that type on almost every
+    // Graph error (including outside-window / wrong language), which previously skipped lang fallbacks.
     const langs = Array.from(
       new Set([input.languageCode || 'en_US', 'en_US', 'en'].filter(Boolean).map(String))
     );
@@ -349,22 +351,31 @@ export class MetaGraphProvider implements MetaProvider {
           components,
         },
       };
-      try {
-        // Reference Messenger tools use form-urlencoded for UTILITY campaign sends.
-        return await this.postMessageForm(
-          input.pageId,
-          input.pageAccessToken,
-          input.recipientPsid,
-          message,
-          'UTILITY',
-          input.idempotencyKey
-        );
-      } catch (err) {
-        lastErr = err;
-        const text = err instanceof Error ? err.message : String(err);
-        // Hard stop on token / rate — do not burn other languages.
-        if (/190|OAuthException|session has expired|rate limit|code.: ?4\b|code.: ?17\b/i.test(text)) {
-          throw err;
+      for (const mode of ['omit_product', 'facebook'] as const) {
+        try {
+          return await this.postMessageForm(
+            input.pageId,
+            input.pageAccessToken,
+            input.recipientPsid,
+            message,
+            'UTILITY',
+            `${input.idempotencyKey}:${lang}:${mode}`,
+            undefined,
+            mode === 'facebook' ? 'facebook' : undefined
+          );
+        } catch (err) {
+          lastErr = err;
+          const text = err instanceof Error ? err.message : String(err);
+          if (
+            /"code"\s*:\s*190\b|\(#190\)|session has expired|error validating access token/i.test(
+              text
+            )
+          ) {
+            throw err;
+          }
+          if (/"code"\s*:\s*(4|17|32|613)\b|rate limit|code.: ?(4|17)\b/i.test(text)) {
+            throw err;
+          }
         }
       }
     }
@@ -632,7 +643,8 @@ export class MetaGraphProvider implements MetaProvider {
     message: Record<string, unknown>,
     messagingType: 'UTILITY' | 'RESPONSE' | 'MESSAGE_TAG',
     idempotencyKey: string,
-    tag?: string
+    tag?: string,
+    messagingProduct?: 'facebook' | 'instagram'
   ): Promise<MetaSendResult> {
     // Business Suite / inbox ids sometimes prefix with t_
     const recipientId = String(recipientPsid || '')
@@ -644,6 +656,7 @@ export class MetaGraphProvider implements MetaProvider {
     form.append('messaging_type', messagingType);
     form.append('access_token', pageAccessToken);
     if (tag) form.append('tag', tag);
+    if (messagingProduct) form.append('messaging_product', messagingProduct);
 
     const res = await fetch(`${this.base()}/${pageId}/messages`, {
       method: 'POST',

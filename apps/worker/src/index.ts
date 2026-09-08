@@ -1123,7 +1123,22 @@ async function handleCampaignSend(job: Job) {
         });
       } catch (utilErr) {
         // In-window fallback only — matches reference campaign-engine.
-        if (!within24h) throw utilErr;
+        if (!within24h) {
+          const wrapped = Object.assign(
+            new Error(
+              `UTILITY send failed outside 24h window: ${utilErr instanceof Error ? utilErr.message : String(utilErr)}`
+            ),
+            utilErr instanceof Error
+              ? {
+                  status: (utilErr as Error & { status?: number }).status,
+                  code: (utilErr as Error & { code?: number }).code,
+                  subcode: (utilErr as Error & { subcode?: number }).subcode,
+                  retryable: (utilErr as Error & { retryable?: boolean }).retryable,
+                }
+              : {}
+          );
+          throw wrapped;
+        }
         result = await meta.sendResponseMessage({
           pageId: cp.platformPageId,
           pageAccessToken: token,
@@ -1189,7 +1204,27 @@ async function handleCampaignSend(job: Job) {
     ]);
   } catch (err) {
     await refundQuota(campaign.userId, quotaUnits);
-    const classified = classifyMetaSendError(err);
+    let classified = classifyMetaSendError(err);
+    if (
+      classified.kind === 'outside_window' &&
+      cp.templateReady &&
+      /UTILITY send failed|utility_window|outside of allowed window/i.test(
+        err instanceof Error ? err.message : String(err)
+      )
+    ) {
+      classified = {
+        ...classified,
+        reason: 'utility_window_rejected',
+        message:
+          'Meta rejected UTILITY for this Page outside 24h. Reconnect Facebook, select this Page in the picker, grant Utility Messaging, confirm template APPROVED (en/en_US).',
+      };
+      await prisma.broadcastCampaignPage.update({
+        where: { id: cp.id },
+        data: {
+          lastError: classified.message,
+        },
+      });
+    }
 
     if (classified.retryable) {
       await prisma.broadcastCampaignRecipient.update({

@@ -120,18 +120,21 @@ export function classifyMetaSendError(err: unknown): ClassifiedMetaSendError {
     };
   }
 
-  // True 24h / policy window — subcode-first (bare code 10 is overloaded)
+  // True 24h / policy window — subcode-first (bare code 10 is overloaded).
+  // When our worker wraps a failed UTILITY attempt, prefer the utility-specific reason.
   if (
     (subcode !== undefined && WINDOW_SUBCODES.has(subcode)) ||
     /outside of allowed window|outside.*messaging window|24.?hour window/i.test(blob)
   ) {
+    const utilityAttempt = /UTILITY send failed|utility_window_rejected/i.test(text);
     return {
       kind: 'outside_window',
       code,
       subcode,
-      reason: 'outside_window',
-      message:
-        'Outside the 24h messaging window — UTILITY template did not deliver. Reconnect Facebook, grant Utility Messaging for this Page, and confirm the template is APPROVED.',
+      reason: utilityAttempt ? 'utility_window_rejected' : 'outside_window',
+      message: utilityAttempt
+        ? 'Meta rejected UTILITY outside the 24h window. Reconnect Facebook, tick this Page in the picker, grant Utility Messaging (pages_utility_messaging), and confirm the template language (en / en_US) is APPROVED.'
+        : 'Outside the 24h messaging window — UTILITY template did not deliver. Reconnect Facebook, grant Utility Messaging for this Page, and confirm the template is APPROVED.',
       retryable: false,
       deactivateContact: false,
     };
