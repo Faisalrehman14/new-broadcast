@@ -28,7 +28,8 @@ describe('campaign helpers', () => {
 
   it('exposes plain UTILITY + starters', () => {
     assert.equal(PLAIN_UTILITY_TEMPLATE_NAME, 'castme_plain_utility_v1');
-    assert.ok(STARTER_UTILITY_TEMPLATES.length >= 3);
+    assert.ok(STARTER_UTILITY_TEMPLATES.length >= 28);
+    assert.ok(STARTER_UTILITY_TEMPLATES.some((t) => t.name.startsWith('pi_')));
   });
 
   it('findActiveCampaign is exported', () => {

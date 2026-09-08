@@ -1,6 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  transpilePackages: ['@pagebroadcast/validation', '@pagebroadcast/types'],
   images: {
     remotePatterns: [
       { protocol: 'https', hostname: 'ui-avatars.com' },

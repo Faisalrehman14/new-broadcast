@@ -172,3 +172,9 @@ export const analyticsQuerySchema = z.object({
   to: z.string().datetime().optional(),
   pageId: z.string().uuid().optional(),
 });
+
+export {
+  STARTER_UTILITY_TEMPLATES,
+  STARTER_UTILITY_TEMPLATE_COUNT,
+  type StarterUtilityTemplate,
+} from './starter-catalog.js';
