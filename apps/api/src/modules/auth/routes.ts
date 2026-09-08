@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { loginSchema, registerSchema } from '@pagebroadcast/validation';
+import { z } from 'zod';
 import {
   createSession,
   destroySession,
@@ -13,22 +14,49 @@ import { AppError } from '../../lib/errors.js';
 import { writeAuditLog } from '../../lib/audit.js';
 import { ensureCsrfCookie } from '../../lib/csrf.js';
 import { ensureUserQuota } from '../../lib/campaign.js';
+import { ensureTrialQuota, getBillingStatus } from '../../lib/billing.js';
+import {
+  emailDeliveryConfigured,
+  issueEmailOtp,
+  verifyAndConsumeEmailOtp,
+} from '../../lib/email-otp.js';
 
 export async function authRoutes(app: FastifyInstance) {
+  app.post('/api/auth/register/send-otp', async (request) => {
+    const body = z.object({ email: z.string().email().max(320) }).parse(request.body);
+    const email = body.email.toLowerCase();
+    const existing = await prisma.user.findUnique({ where: { email } });
+    // Anti-enumeration: always succeed
+    if (!existing) {
+      try {
+        await issueEmailOtp(email, 'signup');
+      } catch (err) {
+        if (err instanceof AppError && err.code === 'OTP_COOLDOWN') throw err;
+        throw err;
+      }
+    }
+    return { ok: true, message: 'If this email can be used, a verification code was sent.' };
+  });
+
   app.post('/api/auth/register', async (request, reply) => {
     const body = registerSchema.parse(request.body);
-    const existing = await prisma.user.findUnique({ where: { email: body.email.toLowerCase() } });
+    const email = body.email.toLowerCase();
+    const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) throw new AppError('CONFLICT', 'An account with this email already exists.', 409);
+
+    await verifyAndConsumeEmailOtp(email, 'signup', body.otp);
 
     const user = await prisma.user.create({
       data: {
-        email: body.email.toLowerCase(),
+        email,
         name: body.name,
         passwordHash: await hashPassword(body.password),
+        emailVerifiedAt: new Date(),
+        planKey: 'free',
         settings: { create: { broadcastSend: true } },
       },
     });
-    await ensureUserQuota(user.id);
+    await ensureTrialQuota(user.id);
 
     await createSession(user.id, reply, {
       ip: request.ip,
@@ -47,6 +75,47 @@ export async function authRoutes(app: FastifyInstance) {
       user: { id: user.id, email: user.email, name: user.name, role: user.role },
       csrfToken,
     };
+  });
+
+  app.post('/api/auth/forgot-password/send-otp', async (request) => {
+    const body = z.object({ email: z.string().email().max(320) }).parse(request.body);
+    const email = body.email.toLowerCase();
+    const existing = await prisma.user.findUnique({ where: { email } });
+    if (existing) {
+      try {
+        await issueEmailOtp(email, 'password_reset');
+      } catch (err) {
+        if (err instanceof AppError && err.code === 'OTP_COOLDOWN') throw err;
+        throw err;
+      }
+    }
+    return { ok: true, message: 'If an account exists, a reset code was sent.' };
+  });
+
+  app.post('/api/auth/forgot-password/reset', async (request) => {
+    const body = z
+      .object({
+        email: z.string().email().max(320),
+        otp: z.string().min(4).max(12),
+        password: z.string().min(8).max(128),
+      })
+      .parse(request.body);
+    const email = body.email.toLowerCase();
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) throw new AppError('NOT_FOUND', 'Account not found.', 404);
+    await verifyAndConsumeEmailOtp(email, 'password_reset', body.otp);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash: await hashPassword(body.password) },
+    });
+    await writeAuditLog({
+      actorId: user.id,
+      action: 'user.password_reset',
+      resource: 'user',
+      resourceId: user.id,
+      ip: request.ip,
+    });
+    return { ok: true };
   });
 
   app.post('/api/auth/login', async (request, reply) => {
@@ -115,7 +184,7 @@ export async function authRoutes(app: FastifyInstance) {
   app.get('/api/auth/me', async (request, reply) => {
     const user = await requireUser(request);
     const csrfToken = ensureCsrfCookie(reply, request.cookies.pb_csrf);
-    const [connections, account, settings, quota] = await Promise.all([
+    const [connections, account, settings, quota, billing] = await Promise.all([
       prisma.pageConnection.findMany({
         where: { userId: user.id },
         include: { page: true },
@@ -127,22 +196,36 @@ export async function authRoutes(app: FastifyInstance) {
       }),
       prisma.userSettings.findUnique({ where: { userId: user.id } }),
       ensureUserQuota(user.id),
+      getBillingStatus(user.id),
     ]);
     const facebookConnected = Boolean(account && account.status === 'CONNECTED');
     const hasLiveToken = Boolean(
       facebookConnected && account?.encryptedAccessToken && account.status === 'CONNECTED'
     );
     return {
-      user: { id: user.id, email: user.email, name: user.name, role: user.role },
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        emailVerifiedAt: user.emailVerifiedAt,
+      },
       csrfToken,
       facebookConnected,
       hasLiveToken,
       permissions: { 'broadcast.send': settings?.broadcastSend !== false },
+      planKey: billing.planKey,
+      planName: billing.planName,
+      planExpiresAt: billing.planExpiresAt,
+      planExpired: billing.expired,
+      messagesRemaining: billing.messagesRemaining,
+      messagesLimit: billing.messagesLimit,
       quota: {
         creditsRemaining: quota.creditsRemaining,
         creditsMonthly: quota.creditsMonthly,
         resetAt: quota.resetAt,
       },
+      emailDelivery: emailDeliveryConfigured(),
       pages: connections.map((c) => ({
         connectionId: c.id,
         pageId: c.pageId,

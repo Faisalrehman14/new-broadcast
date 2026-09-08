@@ -17,6 +17,7 @@ import { contactRoutes } from './modules/contacts/routes.js';
 import { templateRoutes } from './modules/templates/routes.js';
 import { broadcastRoutes } from './modules/broadcasts/routes.js';
 import { broadcastCampaignRoutes } from './modules/broadcast-campaign/routes.js';
+import { billingRoutes } from './modules/billing/routes.js';
 import { webhookRoutes } from './modules/webhooks/routes.js';
 import { analyticsRoutes } from './modules/analytics/routes.js';
 import {
@@ -156,6 +157,7 @@ export async function buildApp() {
   await app.register(templateRoutes);
   await app.register(broadcastRoutes);
   await app.register(broadcastCampaignRoutes);
+  await app.register(billingRoutes);
   await app.register(webhookRoutes);
   await app.register(analyticsRoutes);
   await app.register(dashboardRoutes);

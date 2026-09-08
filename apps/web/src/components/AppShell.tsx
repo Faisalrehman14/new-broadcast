@@ -13,6 +13,13 @@ type Me = {
   csrfToken?: string;
   facebookConnected?: boolean;
   hasLiveToken?: boolean;
+  planKey?: string;
+  planName?: string;
+  planExpiresAt?: string | null;
+  planExpired?: boolean;
+  messagesRemaining?: number;
+  messagesLimit?: number;
+  quota?: { creditsRemaining: number; creditsMonthly: number };
   pages: Array<{
     pageId: string;
     name: string;
@@ -89,6 +96,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         isAdmin={me.user.role === 'ADMIN'}
         open={menuOpen}
         onClose={() => setMenuOpen(false)}
+        messagesRemaining={me.messagesRemaining ?? me.quota?.creditsRemaining}
+        messagesLimit={me.messagesLimit ?? me.quota?.creditsMonthly}
+        planExpired={me.planExpired}
       />
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar
@@ -96,6 +106,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           activePageId={activePageId}
           onSelectPage={selectPage}
           onMenu={() => setMenuOpen(true)}
+          messagesRemaining={me.messagesRemaining ?? me.quota?.creditsRemaining}
+          messagesLimit={me.messagesLimit ?? me.quota?.creditsMonthly}
+          planName={me.planName}
+          planExpired={me.planExpired}
         />
         <main className="flex-1 p-4 md:p-6">{children}</main>
       </div>

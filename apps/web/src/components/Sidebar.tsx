@@ -53,6 +53,9 @@ export function Sidebar({
   isAdmin,
   open,
   onClose,
+  messagesRemaining,
+  messagesLimit,
+  planExpired,
 }: {
   pages: PageItem[];
   activePageId?: string;
@@ -61,9 +64,16 @@ export function Sidebar({
   isAdmin?: boolean;
   open?: boolean;
   onClose?: () => void;
+  messagesRemaining?: number;
+  messagesLimit?: number;
+  planExpired?: boolean;
 }) {
   const pathname = usePathname();
   const active = pages.find((p) => p.pageId === activePageId) || pages[0];
+  const remaining = messagesRemaining ?? 0;
+  const limit = messagesLimit ?? 0;
+  const lowCredits =
+    planExpired || remaining < 100 || (limit > 0 && remaining / limit < 0.1);
 
   return (
     <>
@@ -154,15 +164,24 @@ export function Sidebar({
           </div>
           {optional.map((item) => {
             const Icon = item.icon;
+            const isBilling = item.href === '/billing';
             return (
               <Link
                 key={item.href}
                 href={item.href}
                 onClick={onClose}
-                className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-50"
+                className={cn(
+                  'flex items-center gap-3 rounded-lg px-3 py-2 text-sm hover:bg-slate-50',
+                  isBilling && lowCredits ? 'bg-amber-50 font-medium text-amber-900' : 'text-slate-500'
+                )}
               >
                 <Icon className="h-4 w-4" aria-hidden />
-                {item.label}
+                <span className="flex-1">{item.label}</span>
+                {isBilling ? (
+                  <span className="tabular-nums text-[11px]">
+                    {planExpired ? 'Expired' : remaining.toLocaleString()}
+                  </span>
+                ) : null}
               </Link>
             );
           })}

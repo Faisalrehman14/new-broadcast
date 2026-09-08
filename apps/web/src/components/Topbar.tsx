@@ -10,11 +10,19 @@ export function Topbar({
   activePageId,
   onSelectPage,
   onMenu,
+  messagesRemaining,
+  messagesLimit,
+  planName,
+  planExpired,
 }: {
   pages: Array<{ pageId: string; name: string }>;
   activePageId?: string;
   onSelectPage: (id: string) => void;
   onMenu: () => void;
+  messagesRemaining?: number;
+  messagesLimit?: number;
+  planName?: string;
+  planExpired?: boolean;
 }) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
@@ -61,6 +69,13 @@ export function Topbar({
       (results.contacts.length || results.broadcasts.length || results.templates.length),
     [results]
   );
+
+  const remaining = messagesRemaining ?? 0;
+  const limit = messagesLimit ?? 0;
+  const low =
+    planExpired ||
+    remaining < 100 ||
+    (limit > 0 && remaining / limit < 0.1);
 
   return (
     <header className="sticky top-0 z-30 flex items-center gap-3 border-b border-slate-200 bg-white/90 px-4 py-3 backdrop-blur">
@@ -119,6 +134,21 @@ export function Topbar({
           </div>
         ) : null}
       </div>
+
+      <Link
+        href="/billing"
+        className={`hidden items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium sm:flex ${
+          low
+            ? 'border-amber-300 bg-amber-50 text-amber-900'
+            : 'border-slate-200 bg-white text-slate-800 hover:bg-slate-50'
+        }`}
+        title={planExpired ? 'Plan expired — renew' : 'Messages remaining'}
+      >
+        <span className="text-xs uppercase tracking-wide text-slate-500">{planName || 'Plan'}</span>
+        <span className="tabular-nums">
+          {planExpired ? 'Expired' : `${remaining.toLocaleString()} left`}
+        </span>
+      </Link>
 
       <Link href="/notifications" className="btn-secondary relative" aria-label="Notifications">
         <Bell className="h-4 w-4" />

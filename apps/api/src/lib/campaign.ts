@@ -1,6 +1,7 @@
 import type { User } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { AppError } from './errors.js';
+import { FREE_TRIAL, addDays } from './plans.js';
 
 export type AppPermission = 'broadcast.send';
 
@@ -14,14 +15,15 @@ export async function requirePermission(user: User, permission: AppPermission): 
 }
 
 export async function ensureUserQuota(userId: string) {
-  const resetAt = new Date();
-  resetAt.setMonth(resetAt.getMonth() + 1);
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  const trialExpires = addDays(new Date(), FREE_TRIAL.trialDays || 7);
+  const resetAt = user?.planExpiresAt || trialExpires;
   return prisma.userQuota.upsert({
     where: { userId },
     create: {
       userId,
-      creditsRemaining: 5000,
-      creditsMonthly: 5000,
+      creditsRemaining: FREE_TRIAL.messageLimit,
+      creditsMonthly: FREE_TRIAL.messageLimit,
       resetAt,
     },
     update: {},
@@ -29,24 +31,29 @@ export async function ensureUserQuota(userId: string) {
 }
 
 export async function assertQuotaAvailable(userId: string, units: number) {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (user?.planExpiresAt && user.planExpiresAt.getTime() < Date.now()) {
+    const code = user.planKey === 'free' ? 'TRIAL_EXPIRED' : 'SUBSCRIPTION_EXPIRED';
+    throw new AppError(
+      code,
+      user.planKey === 'free'
+        ? 'Your free trial has expired. Upgrade a plan to keep sending.'
+        : 'Your plan has expired. Renew via Billing to keep sending.',
+      402
+    );
+  }
+
   const quota = await ensureUserQuota(userId);
-  if (quota.resetAt.getTime() <= Date.now()) {
-    const next = new Date();
-    next.setMonth(next.getMonth() + 1);
-    const refreshed = await prisma.userQuota.update({
-      where: { userId },
-      data: {
-        creditsRemaining: quota.creditsMonthly,
-        resetAt: next,
-      },
-    });
-    if (refreshed.creditsRemaining < units) {
-      throw new AppError('QUOTA_EXCEEDED', 'Monthly message quota exceeded.', 402);
-    }
-    return refreshed;
+  if (quota.resetAt.getTime() <= Date.now() && user?.planKey && user.planKey !== 'free') {
+    // Paid prepaid plans do not auto-refill on calendar reset — require renew.
+    throw new AppError(
+      'SUBSCRIPTION_EXPIRED',
+      'Your plan period ended. Renew via Billing to refill messages.',
+      402
+    );
   }
   if (quota.creditsRemaining < units) {
-    throw new AppError('QUOTA_EXCEEDED', 'Monthly message quota exceeded.', 402);
+    throw new AppError('QUOTA_EXCEEDED', 'Message quota exceeded. Upgrade or wait for renew.', 402);
   }
   return quota;
 }

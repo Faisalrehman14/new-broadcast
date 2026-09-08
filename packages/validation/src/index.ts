@@ -104,6 +104,7 @@ export const registerSchema = z.object({
   email: z.string().email().max(320),
   password: z.string().min(8).max(128),
   name: z.string().min(1).max(120),
+  otp: z.string().min(4).max(12),
 });
 
 export const connectPagesSchema = z.object({

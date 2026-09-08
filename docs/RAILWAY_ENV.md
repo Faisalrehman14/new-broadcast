@@ -46,3 +46,14 @@ On **`@pagebroadcast/api`** Variables, set:
 Also open **api → Settings → Networking → Generate Domain** if the API has no public URL yet.
 
 The web app proxies `/api/*` to the API so the browser stays same-origin (avoids blank dashboard).
+
+## Billing (Alby) + email OTP
+
+| Variable | Service | Notes |
+|----------|---------|--------|
+| `ALBY_API_TOKEN` | api | From getalby.com/developer — verify invoices + reclaim |
+| `ALBY_LIGHTNING_ADDRESS` | api | Optional `you@getalby.com` for LNURL invoices |
+| `BTC_USD_RATE` | api | Optional override for tests |
+| `ALBY_RECLAIM_INTERVAL_MS` | api | Default `45000` |
+| `RESEND_API_KEY` | api | Required in production for signup OTP emails |
+| `EMAIL_FROM` | api | e.g. `CastMe Pro <noreply@yourdomain.com>` |

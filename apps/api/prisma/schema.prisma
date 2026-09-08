@@ -120,13 +120,16 @@ enum NotificationType {
 }
 
 model User {
-  id           String   @id @default(uuid())
-  email        String   @unique
-  name         String
-  passwordHash String
-  role         UserRole @default(USER)
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  id              String    @id @default(uuid())
+  email           String    @unique
+  name            String
+  passwordHash    String
+  role            UserRole  @default(USER)
+  emailVerifiedAt DateTime? @map("email_verified_at")
+  planKey         String    @default("free") @map("plan_key")
+  planExpiresAt   DateTime? @map("plan_expires_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
 
   facebookAccounts FacebookAccount[]
   pageConnections  PageConnection[]
@@ -142,7 +145,9 @@ model User {
   customTemplates  Template[]          @relation("UserTemplates")
   templateDrafts   BroadcastTemplateDraft[]
   schedules        ScheduledBroadcast[]
+  paymentOrders    PaymentOrder[]
 
+  @@index([planKey])
   @@map("users")
 }
 
@@ -731,8 +736,8 @@ model PageUtilityTemplate {
 model UserQuota {
   id               String   @id @default(uuid())
   userId           String   @unique @map("user_id")
-  creditsRemaining Int      @default(5000) @map("credits_remaining")
-  creditsMonthly   Int      @default(5000) @map("credits_monthly")
+  creditsRemaining Int      @default(2000) @map("credits_remaining")
+  creditsMonthly   Int      @default(2000) @map("credits_monthly")
   resetAt          DateTime @map("reset_at")
   createdAt        DateTime @default(now()) @map("created_at")
   updatedAt        DateTime @updatedAt @map("updated_at")
@@ -740,6 +745,61 @@ model UserQuota {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("user_quotas")
+}
+
+model EmailOtpCode {
+  id        String   @id @default(uuid())
+  email     String
+  purpose   String
+  otpHash   String   @map("otp_hash")
+  expiresAt DateTime @map("expires_at")
+  attempts  Int      @default(0)
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([email, purpose])
+  @@map("email_otp_codes")
+}
+
+model SubscriptionPlan {
+  id           String   @id @default(uuid())
+  key          String   @unique
+  name         String
+  amountCents  Int      @map("amount_cents")
+  messageLimit Int      @map("message_limit")
+  interval     String   @default("month")
+  active       Boolean  @default(true)
+  sortOrder    Int      @default(0) @map("sort_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("subscription_plans")
+}
+
+model PaymentOrder {
+  id           String    @id @default(uuid())
+  userId       String    @map("user_id")
+  planKey      String    @map("plan_key")
+  amountCents  Int       @map("amount_cents")
+  provider     String    @default("alby")
+  status       String    @default("pending")
+  bolt11       String?
+  paymentHash  String?   @map("payment_hash")
+  qrDataUrl    String?   @map("qr_data_url")
+  sats         Int?
+  expiresAt    DateTime? @map("expires_at")
+  settledAt    DateTime? @map("settled_at")
+  activatedAt  DateTime? @map("activated_at")
+  errorMessage String?   @map("error_message")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([paymentHash])
+  @@index([status, createdAt])
+  @@map("payment_orders")
 }
 
 model BroadcastTemplateDraft {

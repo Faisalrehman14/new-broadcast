@@ -250,27 +250,252 @@ export async function activityRoutes(app: FastifyInstance) {
 
 export async function adminRoutes(app: FastifyInstance) {
   const { requireAdmin } = await import('../../lib/auth.js');
+  const { requireCsrf } = await import('../../lib/csrf.js');
+  const {
+    activatePlanForUser,
+    grantMessages,
+    listActivePlans,
+    reclaimPendingAlbyOrders,
+    resetQuotaToPlan,
+    syncCanonicalPlans,
+    tryActivateOrder,
+  } = await import('../../lib/billing.js');
+  const { isAlbyConfigured } = await import('../../lib/alby.js');
+  const { emailDeliveryConfigured } = await import('../../lib/email-otp.js');
+  const { writeAuditLog } = await import('../../lib/audit.js');
+  const { z } = await import('zod');
 
   app.get('/api/admin/overview', async (request) => {
     await requireAdmin(request);
-    const [users, pages, broadcasts, webhooks, failed] = await Promise.all([
-      prisma.user.count(),
-      prisma.pageConnection.count(),
-      prisma.broadcast.count(),
-      prisma.webhookEvent.count(),
-      prisma.broadcastRecipient.count({ where: { status: 'FAILED' } }),
-    ]);
-    return { users, pages, broadcasts, webhooks, failedMessages: failed };
+    const [users, pages, broadcasts, campaigns, webhooks, failed, settledOrders] =
+      await Promise.all([
+        prisma.user.count(),
+        prisma.pageConnection.count(),
+        prisma.broadcast.count(),
+        prisma.broadcastCampaign.count(),
+        prisma.webhookEvent.count(),
+        prisma.broadcastCampaignRecipient.count({ where: { status: 'FAILED' } }),
+        prisma.paymentOrder.findMany({
+          where: { status: 'activated' },
+          select: { amountCents: true },
+        }),
+      ]);
+    const revenueCents = settledOrders.reduce((s, o) => s + o.amountCents, 0);
+    return {
+      users,
+      pages,
+      broadcasts,
+      campaigns,
+      webhooks,
+      failedMessages: failed,
+      activatedOrders: settledOrders.length,
+      revenueCents,
+      revenueUsd: (revenueCents / 100).toFixed(2),
+      albyConfigured: isAlbyConfigured(),
+      email: emailDeliveryConfigured(),
+    };
   });
 
   app.get('/api/admin/users', async (request) => {
     await requireAdmin(request);
+    const q = (request.query as { q?: string }).q?.trim();
     const users = await prisma.user.findMany({
-      select: { id: true, email: true, name: true, role: true, createdAt: true },
+      where: q
+        ? {
+            OR: [
+              { email: { contains: q, mode: 'insensitive' } },
+              { name: { contains: q, mode: 'insensitive' } },
+            ],
+          }
+        : undefined,
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        planKey: true,
+        planExpiresAt: true,
+        emailVerifiedAt: true,
+        createdAt: true,
+        quota: {
+          select: { creditsRemaining: true, creditsMonthly: true, resetAt: true },
+        },
+        settings: { select: { broadcastSend: true } },
+      },
       orderBy: { createdAt: 'desc' },
       take: 100,
     });
     return { users };
+  });
+
+  app.post('/api/admin/users/:id/plan', async (request) => {
+    const admin = await requireAdmin(request);
+    requireCsrf(request);
+    const { id } = request.params as { id: string };
+    const body = z
+      .object({
+        planKey: z.string().min(1),
+        extend: z.boolean().optional(),
+      })
+      .parse(request.body);
+    if (body.planKey === 'free') {
+      const { ensureTrialQuota } = await import('../../lib/billing.js');
+      await ensureTrialQuota(id);
+    } else {
+      await activatePlanForUser({
+        userId: id,
+        planKey: body.planKey,
+        extendSamePlan: body.extend,
+      });
+    }
+    await writeAuditLog({
+      actorId: admin.id,
+      action: 'admin.user.plan',
+      resource: 'user',
+      resourceId: id,
+      ip: request.ip,
+      metadata: body,
+    });
+    return { ok: true };
+  });
+
+  app.post('/api/admin/users/:id/grant-messages', async (request) => {
+    const admin = await requireAdmin(request);
+    requireCsrf(request);
+    const { id } = request.params as { id: string };
+    const body = z.object({ amount: z.number().int().min(1).max(10_000_000) }).parse(request.body);
+    await grantMessages(id, body.amount);
+    await writeAuditLog({
+      actorId: admin.id,
+      action: 'admin.user.grant_messages',
+      resource: 'user',
+      resourceId: id,
+      ip: request.ip,
+      metadata: body,
+    });
+    return { ok: true };
+  });
+
+  app.post('/api/admin/users/:id/reset-quota', async (request) => {
+    const admin = await requireAdmin(request);
+    requireCsrf(request);
+    const { id } = request.params as { id: string };
+    await resetQuotaToPlan(id);
+    await writeAuditLog({
+      actorId: admin.id,
+      action: 'admin.user.reset_quota',
+      resource: 'user',
+      resourceId: id,
+      ip: request.ip,
+    });
+    return { ok: true };
+  });
+
+  app.post('/api/admin/users/:id/broadcast-send', async (request) => {
+    const admin = await requireAdmin(request);
+    requireCsrf(request);
+    const { id } = request.params as { id: string };
+    const body = z.object({ enabled: z.boolean() }).parse(request.body);
+    await prisma.userSettings.upsert({
+      where: { userId: id },
+      create: { userId: id, broadcastSend: body.enabled },
+      update: { broadcastSend: body.enabled },
+    });
+    await writeAuditLog({
+      actorId: admin.id,
+      action: 'admin.user.broadcast_send',
+      resource: 'user',
+      resourceId: id,
+      ip: request.ip,
+      metadata: body,
+    });
+    return { ok: true };
+  });
+
+  app.get('/api/admin/plans', async (request) => {
+    await requireAdmin(request);
+    await syncCanonicalPlans();
+    return { plans: await listActivePlans() };
+  });
+
+  app.patch('/api/admin/plans/:key', async (request) => {
+    const admin = await requireAdmin(request);
+    requireCsrf(request);
+    const { key } = request.params as { key: string };
+    const body = z
+      .object({
+        name: z.string().min(1).optional(),
+        amountCents: z.number().int().min(0).optional(),
+        messageLimit: z.number().int().min(0).optional(),
+        active: z.boolean().optional(),
+      })
+      .parse(request.body);
+    const plan = await prisma.subscriptionPlan.update({
+      where: { key },
+      data: body,
+    });
+    await writeAuditLog({
+      actorId: admin.id,
+      action: 'admin.plan.update',
+      resource: 'subscription_plan',
+      resourceId: plan.id,
+      ip: request.ip,
+      metadata: body,
+    });
+    return { plan };
+  });
+
+  app.get('/api/admin/payment-orders', async (request) => {
+    await requireAdmin(request);
+    const orders = await prisma.paymentOrder.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+      include: { user: { select: { email: true, name: true } } },
+    });
+    return { orders };
+  });
+
+  app.post('/api/admin/payment-orders/:id/activate', async (request) => {
+    const admin = await requireAdmin(request);
+    requireCsrf(request);
+    const { id } = request.params as { id: string };
+    const result = await tryActivateOrder(id, { force: true });
+    await writeAuditLog({
+      actorId: admin.id,
+      action: 'admin.payment.activate',
+      resource: 'payment_order',
+      resourceId: id,
+      ip: request.ip,
+    });
+    return result;
+  });
+
+  app.post('/api/admin/billing/reclaim', async (request) => {
+    await requireAdmin(request);
+    requireCsrf(request);
+    return reclaimPendingAlbyOrders(50);
+  });
+
+  app.get('/api/admin/system', async (request) => {
+    await requireAdmin(request);
+    return {
+      albyConfigured: isAlbyConfigured(),
+      email: emailDeliveryConfigured(),
+      nodeEnv: process.env.NODE_ENV || 'development',
+      recentAudit: await prisma.auditLog.findMany({
+        orderBy: { createdAt: 'desc' },
+        take: 40,
+        select: {
+          id: true,
+          action: true,
+          resource: true,
+          resourceId: true,
+          actorId: true,
+          createdAt: true,
+          metadata: true,
+        },
+      }),
+    };
   });
 
   app.get('/api/admin/pages', async (request) => {
@@ -313,6 +538,20 @@ export async function adminRoutes(app: FastifyInstance) {
           createdAt: true,
         },
       }),
+      campaigns: await prisma.broadcastCampaign.findMany({
+        orderBy: { createdAt: 'desc' },
+        take: 50,
+        select: {
+          id: true,
+          phase: true,
+          userId: true,
+          estimatedRecipients: true,
+          sentCount: true,
+          failedCount: true,
+          skippedCount: true,
+          createdAt: true,
+        },
+      }),
     };
   });
 
@@ -330,7 +569,6 @@ export async function adminRoutes(app: FastifyInstance) {
           processingError: true,
           createdAt: true,
           pageId: true,
-          // payload available but truncated in list
         },
       }),
     };
@@ -352,6 +590,10 @@ export async function adminRoutes(app: FastifyInstance) {
           failedAt: true,
         },
       }),
+      campaignFailures: await prisma.broadcastCampaignFailure.findMany({
+        orderBy: { createdAt: 'desc' },
+        take: 50,
+      }),
     };
   });
 
@@ -366,6 +608,7 @@ export async function adminRoutes(app: FastifyInstance) {
     };
   });
 }
+
 
 export async function healthRoutes(app: FastifyInstance) {
   app.get('/health', async () => ({ status: 'ok', service: 'castmepro-api' }));
