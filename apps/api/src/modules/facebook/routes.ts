@@ -137,12 +137,48 @@ export async function facebookRoutes(app: FastifyInstance) {
         },
       });
 
+      // Remint Page tokens while the user token is fresh (fixes "no live token" after reconnect).
+      let metaPageCount = -1;
+      let reminted = 0;
+      try {
+        const metaPages = await metaProvider.getPages(token.accessToken);
+        metaPageCount = metaPages.length;
+        for (const mp of metaPages) {
+          if (!mp.accessToken) continue;
+          const updated = await prisma.facebookPage.updateMany({
+            where: {
+              platformPageId: mp.id,
+              facebookAccount: { userId: user.id },
+            },
+            data: {
+              encryptedPageToken: encryptSecret(mp.accessToken),
+              name: mp.name,
+              profileImage: mp.pictureUrl,
+              category: mp.category,
+            },
+          });
+          reminted += updated.count;
+        }
+        logger.info(
+          { requestId: request.id, metaPageCount, reminted },
+          'facebook oauth reminted page tokens'
+        );
+      } catch (remintErr) {
+        metaPageCount = 0;
+        logger.warn(
+          { err: remintErr, requestId: request.id },
+          'facebook oauth page remint skipped (empty picker or Graph error)'
+        );
+      }
+
       await notifyUser({
         userId: user.id,
         type: 'FACEBOOK_CONNECTED',
         title: 'Facebook connected',
         body: longLived
-          ? 'Your Facebook account was connected successfully.'
+          ? metaPageCount > 0
+            ? `Facebook connected — refreshed ${reminted} Page token(s).`
+            : 'Facebook connected. If Select Pages is empty, reconnect and tick every Page in the Facebook picker.'
           : 'Facebook connected, but long-lived token exchange failed — reconnect again soon or verify META_APP_SECRET.',
       });
       await writeAuditLog({
@@ -151,13 +187,21 @@ export async function facebookRoutes(app: FastifyInstance) {
         resource: 'facebook_account',
         resourceId: fbUser.id,
         ip: request.ip,
-        metadata: { longLived },
+        metadata: { longLived, reminted, metaPageCount },
       });
 
+      const warn =
+        metaPageCount === 0
+          ? longLived
+            ? 'no_pages'
+            : 'short_token'
+          : longLived
+            ? null
+            : 'short_token';
       return reply.redirect(
-        longLived
-          ? `${config.APP_URL}/pages/select`
-          : `${config.APP_URL}/pages/select?warn=short_token`
+        warn
+          ? `${config.APP_URL}/pages/select?warn=${warn}`
+          : `${config.APP_URL}/pages/select`
       );
     } catch (err) {
       const mapped = mapMetaError(err);
@@ -179,54 +223,94 @@ export async function facebookRoutes(app: FastifyInstance) {
   app.get('/api/facebook/pages', async (request) => {
     const user = await requireUser(request);
     const account = await prisma.facebookAccount.findFirst({
-      where: { userId: user.id, status: 'CONNECTED' },
+      where: { userId: user.id },
       orderBy: { updatedAt: 'desc' },
     });
-    if (!account) {
+    if (!account || !account.encryptedAccessToken) {
       return { pages: [], connected: false };
     }
 
     const { decryptSecret } = await import('../../lib/crypto.js');
-    let pages;
-    try {
-      const accessToken = decryptSecret(account.encryptedAccessToken);
-      pages = await metaProvider.getPages(accessToken);
-      await prisma.facebookAccount.update({
-        where: { id: account.id },
-        data: { lastApiSuccessAt: new Date() },
-      });
-    } catch (err) {
-      await prisma.facebookAccount.update({
-        where: { id: account.id },
-        data: {
-          status: 'NEEDS_REAUTH',
-          lastError: err instanceof Error ? err.message : 'unknown',
-        },
-      });
-      throw mapMetaError(err);
-    }
-
     const connections = await prisma.pageConnection.findMany({
       where: { userId: user.id },
       include: { page: true },
     });
     const byPlatform = new Map(connections.map((c) => [c.page.platformPageId, c]));
 
+    let pages: Awaited<ReturnType<typeof metaProvider.getPages>> = [];
+    let metaError: string | null = null;
+    try {
+      const accessToken = decryptSecret(account.encryptedAccessToken);
+      pages = await metaProvider.getPages(accessToken);
+      await prisma.facebookAccount.update({
+        where: { id: account.id },
+        data: {
+          status: 'CONNECTED',
+          lastApiSuccessAt: new Date(),
+          lastError: pages.length ? null : 'me_accounts_empty',
+        },
+      });
+    } catch (err) {
+      metaError = err instanceof Error ? err.message : 'getPages failed';
+      const expired = mapMetaError(err).code === 'FACEBOOK_EXPIRED';
+      // Only force reauth on real token expiry — empty/partial picker must not blank the UI.
+      if (expired) {
+        await prisma.facebookAccount.update({
+          where: { id: account.id },
+          data: { status: 'NEEDS_REAUTH', lastError: metaError },
+        });
+        throw mapMetaError(err);
+      }
+      logger.warn({ err, userId: user.id }, 'facebook getPages soft-fail; serving DB connections');
+      await prisma.facebookAccount.update({
+        where: { id: account.id },
+        data: {
+          status: account.status === 'NEEDS_REAUTH' ? 'NEEDS_REAUTH' : 'CONNECTED',
+          lastError: metaError.slice(0, 500),
+        },
+      });
+    }
+
+    const fromMeta = pages.map((p) => {
+      const conn = byPlatform.get(p.id);
+      return {
+        platformPageId: p.id,
+        name: p.name,
+        profileImage: p.pictureUrl,
+        category: p.category,
+        connectionStatus: conn?.status ?? 'AVAILABLE',
+        pageId: conn?.pageId ?? null,
+        contactCount: conn?.contactCount ?? 0,
+        connected: Boolean(conn),
+        hasLivePageToken: Boolean(p.accessToken),
+        source: 'meta' as const,
+      };
+    });
+
+    // When Meta returns nothing (picker empty), still show already-linked Pages from DB.
+    const fromDb =
+      fromMeta.length > 0
+        ? []
+        : connections
+            .filter((c) => c.status !== 'DISCONNECTED')
+            .map((c) => ({
+              platformPageId: c.page.platformPageId,
+              name: c.page.name,
+              profileImage: c.page.profileImage || undefined,
+              category: c.page.category || undefined,
+              connectionStatus: c.status,
+              pageId: c.pageId,
+              contactCount: c.contactCount,
+              connected: true,
+              hasLivePageToken: Boolean(c.page.encryptedPageToken),
+              source: 'db' as const,
+            }));
+
     return {
       connected: true,
-      pages: pages.map((p) => {
-        const conn = byPlatform.get(p.id);
-        return {
-          platformPageId: p.id,
-          name: p.name,
-          profileImage: p.pictureUrl,
-          category: p.category,
-          connectionStatus: conn?.status ?? 'AVAILABLE',
-          pageId: conn?.pageId ?? null,
-          contactCount: conn?.contactCount ?? 0,
-          connected: Boolean(conn),
-        };
-      }),
+      metaPageCount: pages.length,
+      metaError,
+      pages: fromMeta.length ? fromMeta : fromDb,
     };
   });
 
@@ -235,22 +319,36 @@ export async function facebookRoutes(app: FastifyInstance) {
     requireCsrf(request);
     const body = connectPagesSchema.parse(request.body);
     const account = await prisma.facebookAccount.findFirst({
-      where: { userId: user.id, status: 'CONNECTED' },
+      where: { userId: user.id },
       orderBy: { updatedAt: 'desc' },
     });
-    if (!account) throw new AppError('FACEBOOK_EXPIRED', 'Connect Facebook first.', 400);
+    if (!account?.encryptedAccessToken) {
+      throw new AppError('FACEBOOK_EXPIRED', 'Connect Facebook first.', 400);
+    }
 
     const { decryptSecret } = await import('../../lib/crypto.js');
     const userToken = decryptSecret(account.encryptedAccessToken);
     let metaPages;
     try {
       metaPages = await metaProvider.getPages(userToken);
+      if (account.status !== 'CONNECTED') {
+        await prisma.facebookAccount.update({
+          where: { id: account.id },
+          data: { status: 'CONNECTED', lastApiSuccessAt: new Date(), lastError: null },
+        });
+      }
     } catch (err) {
       throw mapMetaError(err);
     }
 
     const selected = metaPages.filter((p) => body.pageIds.includes(p.id));
-    if (!selected.length) throw new AppError('VALIDATION', 'No valid pages selected.', 400);
+    if (!selected.length) {
+      throw new AppError(
+        'VALIDATION',
+        'No valid Pages in this Facebook token. Reconnect, tick every Page in the picker, then try again.',
+        400
+      );
+    }
 
     const results = [];
     for (const p of selected) {

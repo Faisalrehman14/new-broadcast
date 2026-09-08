@@ -213,9 +213,15 @@ export async function authRoutes(app: FastifyInstance) {
       ensureUserQuota(user.id),
       getBillingStatus(user.id),
     ]);
-    const facebookConnected = Boolean(account && account.status === 'CONNECTED');
+    const facebookConnected = Boolean(
+      account && (account.status === 'CONNECTED' || account.status === 'NEEDS_REAUTH')
+    );
+    const hasUserToken = Boolean(account?.encryptedAccessToken);
+    const hasAnyPageToken = connections.some((c) => Boolean(c.page.encryptedPageToken));
+    // Broadcast can send with Page tokens even if /me/accounts is temporarily empty after OAuth.
     const hasLiveToken = Boolean(
-      facebookConnected && account?.encryptedAccessToken && account.status === 'CONNECTED'
+      hasUserToken &&
+        (account?.status === 'CONNECTED' || (account?.status === 'NEEDS_REAUTH' && hasAnyPageToken))
     );
     return {
       user: {

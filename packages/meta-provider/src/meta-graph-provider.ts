@@ -137,28 +137,33 @@ export class MetaGraphProvider implements MetaProvider {
     // Prefer /me; fall back to debug_token (works even when public_profile is missing).
     const attempts = ['id,name', 'id'] as const;
     let lastErr = '';
-    for (const fields of attempts) {
-      const params = this.withProof(
-        new URLSearchParams({
+    for (const useProof of [true, false]) {
+      for (const fields of attempts) {
+        const params = new URLSearchParams({
           fields,
           access_token: userAccessToken,
-        }),
-        userAccessToken
-      );
-      const res = await fetch(`${this.base()}/me?${params}`);
-      const raw = await res.text();
-      if (res.ok) {
-        try {
-          const data = JSON.parse(raw) as { id?: string; name?: string; email?: string; error?: unknown };
-          if (data.id && !data.error) {
-            return { id: String(data.id), name: data.name || 'Facebook User', email: data.email };
+        });
+        if (useProof) this.withProof(params, userAccessToken);
+        const res = await fetch(`${this.base()}/me?${params}`);
+        const raw = await res.text();
+        if (res.ok) {
+          try {
+            const data = JSON.parse(raw) as {
+              id?: string;
+              name?: string;
+              email?: string;
+              error?: unknown;
+            };
+            if (data.id && !data.error) {
+              return { id: String(data.id), name: data.name || 'Facebook User', email: data.email };
+            }
+            lastErr = raw.slice(0, 400);
+          } catch {
+            lastErr = raw.slice(0, 200);
           }
-          lastErr = raw.slice(0, 400);
-        } catch {
-          lastErr = raw.slice(0, 200);
+        } else {
+          lastErr = `${res.status} ${raw.slice(0, 400)}`;
         }
-      } else {
-        lastErr = `${res.status} ${raw.slice(0, 400)}`;
       }
     }
 
@@ -202,34 +207,59 @@ export class MetaGraphProvider implements MetaProvider {
   }
 
   async getPages(userAccessToken: string): Promise<MetaPageSummary[]> {
-    const params = this.withProof(
-      new URLSearchParams({
-        fields: 'id,name,access_token,category,tasks,picture{url}',
-        access_token: userAccessToken,
-        limit: '100',
-      }),
-      userAccessToken
-    );
-    const res = await fetch(`${this.base()}/me/accounts?${params}`);
-    if (!res.ok) throw new Error(`Meta getPages failed: ${res.status}`);
-    const data = (await res.json()) as {
-      data?: Array<{
-        id: string;
-        name: string;
-        access_token: string;
-        category?: string;
-        tasks?: string[];
-        picture?: { data?: { url?: string } };
-      }>;
-    };
-    return (data.data ?? []).map((p) => ({
-      id: p.id,
-      name: p.name,
-      accessToken: p.access_token,
-      category: p.category,
-      tasks: p.tasks,
-      pictureUrl: p.picture?.data?.url,
-    }));
+    const fieldSets = [
+      'id,name,access_token,category,tasks,picture{url}',
+      'id,name,access_token,category,tasks',
+      'id,name,access_token',
+    ] as const;
+
+    let lastErr = 'unknown';
+    for (const useProof of [true, false]) {
+      for (const fields of fieldSets) {
+        const params = new URLSearchParams({
+          fields,
+          access_token: userAccessToken,
+          limit: '100',
+        });
+        if (useProof) this.withProof(params, userAccessToken);
+        const res = await fetch(`${this.base()}/me/accounts?${params}`);
+        const raw = await res.text();
+        if (!res.ok) {
+          lastErr = `${res.status} ${raw.slice(0, 300)}`;
+          continue;
+        }
+        try {
+          const data = JSON.parse(raw) as {
+            data?: Array<{
+              id: string;
+              name: string;
+              access_token?: string;
+              category?: string;
+              tasks?: string[];
+              picture?: { data?: { url?: string } };
+            }>;
+            error?: unknown;
+          };
+          if (data.error) {
+            lastErr = raw.slice(0, 300);
+            continue;
+          }
+          return (data.data ?? [])
+            .filter((p) => p.id && p.access_token)
+            .map((p) => ({
+              id: p.id,
+              name: p.name || p.id,
+              accessToken: p.access_token as string,
+              category: p.category,
+              tasks: p.tasks,
+              pictureUrl: p.picture?.data?.url,
+            }));
+        } catch {
+          lastErr = raw.slice(0, 200);
+        }
+      }
+    }
+    throw new Error(`Meta getPages failed: ${lastErr}`);
   }
 
   async remintPageTokensFromUserToken(userAccessToken: string): Promise<MetaPageSummary[]> {
