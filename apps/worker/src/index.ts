@@ -424,24 +424,32 @@ async function handleMessageSend(job: Job) {
 
   try {
     const token = decryptSecret(broadcast.page.encryptedPageToken);
-    const values = (broadcast.variableValues || {}) as Record<string, string>;
+    const values = { ...((broadcast.variableValues || {}) as Record<string, string>) };
     const body = broadcast.template.body || broadcast.renderedBody || '';
-    const orderedKeys = Object.keys(values).sort((a, b) => Number(a) - Number(b));
-    const params = orderedKeys.map((k) => values[k] || '');
+    const orderedKeys = Object.keys(values)
+      .filter((k) => /^\d+$/.test(k))
+      .sort((a, b) => Number(a) - Number(b));
 
     // Prefer contact name for {{1}} if empty
-    if ((!params[0] || params[0] === '') && recipient.contact.name) {
-      params[0] = recipient.contact.name;
+    if (orderedKeys.includes('1') && !values['1']?.trim() && recipient.contact.name) {
+      values['1'] = recipient.contact.name;
+    } else if (!values['1']?.trim() && recipient.contact.name && body.includes('{{1}}')) {
+      values['1'] = recipient.contact.name;
     }
+
+    const params = orderedKeys.map((k) => values[k] || '');
+    const text = broadcast.template.isCustom
+      ? String(values.text || broadcast.renderedBody || body || '').trim()
+      : renderTemplatePreview(body, values);
 
     const result = await meta.sendTemplateMessage({
       pageId: broadcast.page.platformPageId,
       pageAccessToken: token,
       recipientPsid: recipient.contact.platformUserId,
       templateName: broadcast.template.metaName,
-      bodyParameters: params.length
-        ? params
-        : [renderTemplatePreview(body, values)],
+      text,
+      bodyParameters: params,
+      lastInteractionAt: recipient.contact.lastInteractionAt,
       idempotencyKey: recipient.idempotencyKey,
     });
 

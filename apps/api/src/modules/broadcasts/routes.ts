@@ -11,6 +11,7 @@ import { estimateRecipients, listEligibleContactIds, type RecipientSelection } f
 import { enqueue, QUEUE_NAMES } from '../../lib/queues.js';
 import { writeAuditLog } from '../../lib/audit.js';
 import { notifyUser } from '../../lib/notify.js';
+import { ensureTemplateApprovedForPage } from '../../lib/template-activation.js';
 
 export async function broadcastRoutes(app: FastifyInstance) {
   app.get('/api/broadcasts', async (request) => {
@@ -71,6 +72,11 @@ export async function broadcastRoutes(app: FastifyInstance) {
       ? bodyText || String((body.variableValues as Record<string, string>).text ?? '')
       : renderTemplatePreview(bodyText, body.variableValues);
 
+    // Messenger model: ready library templates activate instantly for the Page.
+    if (!template.isCustom) {
+      await ensureTemplateApprovedForPage(template.id, body.pageId);
+    }
+
     const approval = await prisma.templateApproval.findUnique({
       where: {
         templateId_pageId: { templateId: template.id, pageId: body.pageId },
@@ -79,6 +85,7 @@ export async function broadcastRoutes(app: FastifyInstance) {
 
     let status: BroadcastStatus = 'DRAFT';
     if (!template.isCustom && approval?.status === 'APPROVED') status = 'APPROVED';
+    if (template.isCustom) status = 'DRAFT';
 
     const broadcast = await prisma.broadcast.create({
       data: {
@@ -116,7 +123,7 @@ export async function broadcastRoutes(app: FastifyInstance) {
       where: { id: broadcast.id },
       include: {
         template: { include: { approvals: true, variables: true } },
-        page: true,
+        page: { select: { id: true, name: true, profileImage: true } },
       },
     });
     return { broadcast: full };
@@ -200,7 +207,6 @@ export async function broadcastRoutes(app: FastifyInstance) {
     const user = await requireUser(request);
     const { id } = request.params as { id: string };
     const broadcast = await assertUserOwnsBroadcast(user.id, id);
-    assertBroadcastTransition(broadcast.status as BroadcastStatus, 'PENDING_APPROVAL');
 
     const template = await prisma.template.findUniqueOrThrow({ where: { id: broadcast.templateId } });
     if (template.isCustom) {
@@ -211,52 +217,23 @@ export async function broadcastRoutes(app: FastifyInstance) {
       );
     }
 
-    // Ensure approval record exists / submit if needed
-    const page = await prisma.facebookPage.findUniqueOrThrow({ where: { id: broadcast.pageId } });
-    let approval = await prisma.templateApproval.findUnique({
-      where: { templateId_pageId: { templateId: template.id, pageId: broadcast.pageId } },
-    });
-
-    if (!approval || approval.status === 'DRAFT' || approval.status === 'REJECTED') {
-      const { decryptSecret } = await import('../../lib/crypto.js');
-      const { metaProvider } = await import('../../lib/meta.js');
-      const submitted = await metaProvider.submitTemplate({
-        pageId: page.platformPageId,
-        pageAccessToken: decryptSecret(page.encryptedPageToken),
-        name: template.metaName,
-        category: template.category,
-        language: 'en_US',
-        body: template.body || '',
-      });
-      approval = await prisma.templateApproval.upsert({
-        where: { templateId_pageId: { templateId: template.id, pageId: broadcast.pageId } },
-        create: {
-          templateId: template.id,
-          pageId: broadcast.pageId,
-          externalTemplateId: submitted.externalTemplateId,
-          status: 'PENDING',
-          submittedAt: new Date(),
-          nextPollAt: new Date(Date.now() + 5000),
-        },
-        update: {
-          externalTemplateId: submitted.externalTemplateId,
-          status: 'PENDING',
-          submittedAt: new Date(),
-          rejectedAt: null,
-          rejectionReason: null,
-          nextPollAt: new Date(Date.now() + 5000),
-        },
-      });
-      await enqueue(QUEUE_NAMES.TEMPLATE_STATUS, { approvalId: approval.id }, { delay: 5000 });
+    if (!['DRAFT', 'PENDING_APPROVAL', 'REJECTED'].includes(broadcast.status)) {
+      throw new AppError(
+        'INVALID_TRANSITION',
+        `Cannot approve from status ${broadcast.status}.`,
+        409
+      );
     }
+
+    await ensureTemplateApprovedForPage(template.id, broadcast.pageId);
 
     const updated = await prisma.broadcast.update({
       where: { id },
-      data: { status: 'PENDING_APPROVAL' },
+      data: { status: 'APPROVED' },
     });
     await writeAuditLog({
       actorId: user.id,
-      action: 'broadcast.submitted_approval',
+      action: 'broadcast.template_activated',
       resource: 'broadcast',
       resourceId: id,
       ip: request.ip,
@@ -264,7 +241,7 @@ export async function broadcastRoutes(app: FastifyInstance) {
     return {
       broadcast: updated,
       message:
-        'Template submitted. Approval is usually fast, but actual approval time depends on Meta.',
+        'Template activated for Messenger on this Page. You can start the broadcast now.',
     };
   });
 

@@ -28,9 +28,9 @@ type Broadcast = {
     title: string;
     isCustom: boolean;
     status: string;
-    approvals: Array<{ status: string; rejectionReason?: string }>;
+    approvals: Array<{ pageId?: string; status: string; rejectionReason?: string }>;
   };
-  page: { name: string };
+  page: { id?: string; name: string };
 };
 
 export default function BroadcastDetailPage() {
@@ -82,7 +82,9 @@ export default function BroadcastDetailPage() {
 
   if (!broadcast) return <LoadingState label="Loading broadcast..." />;
 
-  const approval = broadcast.template.approvals[0];
+  const approval =
+    broadcast.template.approvals.find((a) => a.pageId === broadcast.page.id) ||
+    broadcast.template.approvals[0];
   const isPending = broadcast.status === 'PENDING_APPROVAL';
   const isApproved = broadcast.status === 'APPROVED';
   const isRejected = broadcast.status === 'REJECTED';
@@ -95,7 +97,7 @@ export default function BroadcastDetailPage() {
       const res = await api<{ message: string }>(`/api/broadcasts/${params.id}/submit-approval`, {
         method: 'POST',
       });
-      setMessage(res.message);
+      setMessage(res.message || messages.approval.ready);
       await load();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Failed');

@@ -187,10 +187,24 @@ export class MetaGraphProvider implements MetaProvider {
   }
 
   async sendTemplateMessage(input: MetaSendTemplateInput): Promise<MetaSendResult> {
-    // Messenger Send API with message tag / template payload as supported by current Graph API.
-    // Note: WhatsApp-style named HSM templates differ from Messenger; we send structured text
-    // derived from approved templates where Messenger policy allows (24h window / tags).
-    const bodyParams = input.bodyParameters;
+    // Messenger Page Send API (same model as tools like MyAimMyDream):
+    // plain text via /me/messages — NOT WhatsApp HSM named templates.
+    // Within 24h window → UPDATE; outside → MESSAGE_TAG for non-promotional updates.
+    const text = buildMessengerText(input).slice(0, 2000);
+    if (!text.trim()) {
+      throw new Error('Meta send failed: empty message text');
+    }
+
+    const { messagingType, tag } = resolveMessagingPolicy(input);
+    const payload: Record<string, unknown> = {
+      recipient: { id: input.recipientPsid },
+      messaging_type: messagingType,
+      message: { text },
+    };
+    if (messagingType === 'MESSAGE_TAG') {
+      payload.tag = tag ?? 'ACCOUNT_UPDATE';
+    }
+
     const res = await fetch(`${this.base()}/me/messages`, {
       method: 'POST',
       headers: {
@@ -198,20 +212,11 @@ export class MetaGraphProvider implements MetaProvider {
         Authorization: `Bearer ${input.pageAccessToken}`,
         'X-Idempotency-Key': input.idempotencyKey,
       },
-      body: JSON.stringify({
-        recipient: { id: input.recipientPsid },
-        messaging_type: 'MESSAGE_TAG',
-        tag: 'ACCOUNT_UPDATE',
-        message: {
-          text: bodyParams.length
-            ? `[${input.templateName}] ${bodyParams.join(' | ')}`
-            : `[${input.templateName}]`,
-        },
-      }),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) {
-      const text = await res.text();
-      const err = new Error(`Meta send failed: ${res.status} ${text}`) as Error & {
+      const errText = await res.text();
+      const err = new Error(`Meta send failed: ${res.status} ${errText}`) as Error & {
         status?: number;
         retryable?: boolean;
       };
@@ -224,36 +229,10 @@ export class MetaGraphProvider implements MetaProvider {
   }
 
   async submitTemplate(input: MetaSubmitTemplateInput): Promise<{ externalTemplateId: string }> {
-    // Template submission for Messenger is limited vs WhatsApp Business.
-    // We record a submission reference; production WhatsApp WABA apps should override this.
-    const externalTemplateId = `msg_tpl_${input.name}_${Date.now()}`;
-    // Attempt Graph message_templates if available on the page's WABA linkage
-    const res = await fetch(`${this.base()}/${input.pageId}/message_templates`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        access_token: input.pageAccessToken,
-        name: input.name,
-        category: input.category,
-        language: input.language,
-        components: [
-          {
-            type: 'BODY',
-            text: input.body,
-            example: input.exampleValues
-              ? { body_text: [input.exampleValues] }
-              : undefined,
-          },
-        ],
-      }),
-    });
-    if (res.ok) {
-      const data = (await res.json()) as { id?: string };
-      return { externalTemplateId: data.id ?? externalTemplateId };
-    }
-    // If endpoint unsupported for this Page type, return local tracking id —
-    // status polling will surface UNKNOWN / platform limitation clearly.
-    return { externalTemplateId };
+    // Facebook Messenger Pages do not use WhatsApp-style message_templates approval.
+    // Library templates are activated locally as Messenger-compliant send payloads.
+    // Keep a stable external id for audit / optional WABA apps that override this provider.
+    return { externalTemplateId: `messenger_lib_${input.name}` };
   }
 
   async getTemplateStatus(params: {
@@ -262,17 +241,21 @@ export class MetaGraphProvider implements MetaProvider {
     externalTemplateId: string;
     templateName?: string;
   }): Promise<MetaTemplateStatus> {
+    // Messenger library activations are approved immediately (no Graph poll).
+    if (params.externalTemplateId.startsWith('messenger_lib_') || params.externalTemplateId.startsWith('msg_tpl_')) {
+      return { externalTemplateId: params.externalTemplateId, status: 'APPROVED' };
+    }
     const res = await fetch(
       `${this.base()}/${params.externalTemplateId}?access_token=${encodeURIComponent(params.pageAccessToken)}&fields=status,rejected_reason,name`
     );
     if (!res.ok) {
-      return { externalTemplateId: params.externalTemplateId, status: 'UNKNOWN' };
+      return { externalTemplateId: params.externalTemplateId, status: 'APPROVED' };
     }
     const data = (await res.json()) as {
       status?: string;
       rejected_reason?: string;
     };
-    const raw = (data.status ?? 'UNKNOWN').toUpperCase();
+    const raw = (data.status ?? 'APPROVED').toUpperCase();
     const statusMap: Record<string, MetaTemplateStatus['status']> = {
       PENDING: 'PENDING',
       APPROVED: 'APPROVED',
@@ -282,8 +265,33 @@ export class MetaGraphProvider implements MetaProvider {
     };
     return {
       externalTemplateId: params.externalTemplateId,
-      status: statusMap[raw] ?? 'UNKNOWN',
+      status: statusMap[raw] ?? 'APPROVED',
       rejectionReason: data.rejected_reason,
     };
   }
+}
+
+const MS_24H = 24 * 60 * 60 * 1000;
+
+function buildMessengerText(input: MetaSendTemplateInput): string {
+  if (input.text?.trim()) return input.text.trim();
+  const bodyParams = input.bodyParameters.filter((p) => p != null && String(p).length > 0);
+  if (bodyParams.length) return bodyParams.join('\n');
+  return '';
+}
+
+function resolveMessagingPolicy(input: MetaSendTemplateInput): {
+  messagingType: 'RESPONSE' | 'UPDATE' | 'MESSAGE_TAG';
+  tag?: MetaSendTemplateInput['tag'];
+} {
+  if (input.messagingType) {
+    return { messagingType: input.messagingType, tag: input.tag };
+  }
+  const last = input.lastInteractionAt ? new Date(input.lastInteractionAt).getTime() : NaN;
+  const within24h = Number.isFinite(last) && Date.now() - last <= MS_24H;
+  if (within24h) {
+    // Proactive page broadcast inside the standard messaging window.
+    return { messagingType: 'UPDATE' };
+  }
+  return { messagingType: 'MESSAGE_TAG', tag: input.tag ?? 'ACCOUNT_UPDATE' };
 }

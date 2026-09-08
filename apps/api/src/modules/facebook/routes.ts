@@ -202,7 +202,13 @@ export async function facebookRoutes(app: FastifyInstance) {
         where: { userId_pageId: { userId: user.id, pageId: page.id } },
       });
       if (existing) {
-        results.push({ pageId: page.id, status: 'already_connected' });
+        const { activateMessengerTemplatesForPage } = await import('../../lib/template-activation.js');
+        const activated = await activateMessengerTemplatesForPage({ pageId: page.id });
+        results.push({
+          pageId: page.id,
+          status: 'already_connected',
+          templatesActivated: activated.activated,
+        });
         continue;
       }
 
@@ -233,13 +239,21 @@ export async function facebookRoutes(app: FastifyInstance) {
         userId: user.id,
       });
 
+      // Activate ready Messenger library templates so broadcasts can start without Meta HSM wait.
+      const { activateMessengerTemplatesForPage } = await import('../../lib/template-activation.js');
+      const activated = await activateMessengerTemplatesForPage({ pageId: page.id });
+
       await writeAuditLog({
         actorId: user.id,
         action: 'page.connected',
         resource: 'facebook_page',
         resourceId: page.id,
         ip: request.ip,
-        metadata: { platformPageId: p.id, name: p.name },
+        metadata: {
+          platformPageId: p.id,
+          name: p.name,
+          templatesActivated: activated.activated,
+        },
       });
 
       results.push({
@@ -247,6 +261,7 @@ export async function facebookRoutes(app: FastifyInstance) {
         connectionId: conn.id,
         syncJobId: syncJob.id,
         status: 'connected',
+        templatesActivated: activated.activated,
       });
     }
 

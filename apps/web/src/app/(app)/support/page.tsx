@@ -7,11 +7,11 @@ import { StatusBadge } from '@/components/StatusBadge';
 const FAQ = [
   {
     q: 'How long does Meta template approval take?',
-    a: 'Approval time depends on Meta. CastMe Pro tracks the live status and will unlock Start Broadcast when approved.',
+    a: 'For Messenger Page broadcasts, CastMe Pro activates ready library templates for your Page instantly — no WhatsApp-style Meta review wait. Connect a Page (or use Approve all on Templates), then start sending. Meta still enforces messaging windows and tags at send time.',
   },
   {
     q: 'Why can’t I start a broadcast while pending approval?',
-    a: 'Platform rules require approved templates for certain message types. We never show Sending while approval is pending.',
+    a: 'If a broadcast is stuck pending, open Templates → Approve all for this Page, or click Activate template on the broadcast. Library templates should become APPROVED immediately for Messenger.',
   },
   {
     q: 'Are access tokens stored in the browser?',

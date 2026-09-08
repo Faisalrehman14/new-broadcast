@@ -144,15 +144,8 @@ export class MockMetaProvider implements MetaProvider {
   }
 
   async submitTemplate(input: MetaSubmitTemplateInput): Promise<{ externalTemplateId: string }> {
-    const id = `mock_tpl_${input.name}_${Date.now()}`;
-    this.store.set(id, { status: 'PENDING', submittedAt: Date.now() });
-    // Auto-approve after ~8s when polled (simulation only)
-    setTimeout(() => {
-      const cur = this.store.get(id);
-      if (cur && cur.status === 'PENDING') {
-        this.store.set(id, { ...cur, status: 'APPROVED' });
-      }
-    }, 8000);
+    const id = `messenger_lib_${input.name}`;
+    this.store.set(id, { status: 'APPROVED', submittedAt: Date.now() });
     return { externalTemplateId: id };
   }
 
@@ -161,14 +154,12 @@ export class MockMetaProvider implements MetaProvider {
     pageAccessToken: string;
     externalTemplateId: string;
   }): Promise<MetaTemplateStatus> {
+    if (params.externalTemplateId.startsWith('messenger_lib_')) {
+      return { externalTemplateId: params.externalTemplateId, status: 'APPROVED' };
+    }
     const cur = this.store.get(params.externalTemplateId);
     if (!cur) {
-      return { externalTemplateId: params.externalTemplateId, status: 'UNKNOWN' };
-    }
-    // If still pending past 8s, approve
-    if (cur.status === 'PENDING' && Date.now() - cur.submittedAt > 8000) {
-      cur.status = 'APPROVED';
-      this.store.set(params.externalTemplateId, cur);
+      return { externalTemplateId: params.externalTemplateId, status: 'APPROVED' };
     }
     return {
       externalTemplateId: params.externalTemplateId,

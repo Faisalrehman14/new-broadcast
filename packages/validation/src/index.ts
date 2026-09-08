@@ -134,6 +134,11 @@ export const submitTemplateSchema = z.object({
   variableSampleValues: z.record(z.string()).optional(),
 });
 
+export const activateTemplatesSchema = z.object({
+  pageId: z.string().uuid(),
+  templateIds: z.array(z.string().uuid()).optional(),
+});
+
 export const supportTicketSchema = z.object({
   subject: z.string().min(1).max(200),
   category: z.enum(['GENERAL', 'BILLING', 'TECHNICAL', 'META', 'OTHER']),

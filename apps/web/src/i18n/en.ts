@@ -22,7 +22,9 @@ export const messages = {
   },
   approval: {
     waiting:
-      'Template submitted. Approval is usually fast, but actual approval time depends on Meta.',
+      'Activating Messenger templates for this Page…',
+    ready:
+      'Template is approved for this Page. You can start the broadcast now.',
     customWarning:
       'Custom freeform messages may be subject to platform messaging rules and eligibility restrictions.',
   },
@@ -30,10 +32,10 @@ export const messages = {
     syncNow: 'Sync Now',
     createBroadcast: 'Create Broadcast',
     connectFacebook: 'Connect Facebook',
-    submitApproval: 'Submit for Approval',
-    waitingApproval: 'Waiting for Approval',
+    submitApproval: 'Activate template',
+    waitingApproval: 'Activating…',
     startBroadcast: 'Start Broadcast',
-    fixResubmit: 'Fix & Resubmit',
+    fixResubmit: 'Activate again',
   },
 } as const;
 

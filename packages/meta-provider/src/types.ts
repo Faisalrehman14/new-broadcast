@@ -22,13 +22,28 @@ export interface MetaContact {
   lastInteractionAt?: string;
 }
 
+export type MetaMessagingType = 'RESPONSE' | 'UPDATE' | 'MESSAGE_TAG';
+
+export type MetaMessageTag =
+  | 'ACCOUNT_UPDATE'
+  | 'CONFIRMED_EVENT_UPDATE'
+  | 'POST_PURCHASE_UPDATE'
+  | 'HUMAN_AGENT'
+  | 'CUSTOMER_FEEDBACK';
+
 export interface MetaSendTemplateInput {
   pageId: string;
   pageAccessToken: string;
   recipientPsid: string;
   templateName: string;
   languageCode?: string;
+  /** Rendered message text to send (preferred). */
+  text?: string;
   bodyParameters: string[];
+  /** Contact's last inbound interaction — used to pick RESPONSE/UPDATE vs MESSAGE_TAG. */
+  lastInteractionAt?: string | Date | null;
+  messagingType?: MetaMessagingType;
+  tag?: MetaMessageTag;
   idempotencyKey: string;
 }
 

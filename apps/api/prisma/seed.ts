@@ -36,7 +36,11 @@ async function main() {
       bodyStatus: t.bodyStatus,
       source: t.source,
       isCustom: t.isCustom,
-      status: 'DRAFT' as const,
+      // Ready Messenger library templates are pre-cleared; Page activation still binds per page.
+      status:
+        t.bodyStatus === 'ready' && !t.isCustom
+          ? ('APPROVED' as const)
+          : ('DRAFT' as const),
     };
 
     const template = existing

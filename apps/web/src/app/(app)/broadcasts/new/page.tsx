@@ -51,6 +51,13 @@ export default function NewBroadcastPage() {
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    if (!pageId) return;
+    api<{ templates: Template[] }>(`/api/templates?pageId=${encodeURIComponent(pageId)}`)
+      .then((r) => setTemplates(r.templates))
+      .catch(() => undefined);
+  }, [pageId]);
+
   const template = templates.find((t) => t.id === templateId);
   const filtered = templates.filter((t) => {
     if (category === 'CUSTOM') return t.isCustom || t.source === 'CUSTOM';
@@ -193,7 +200,12 @@ export default function NewBroadcastPage() {
                     <p className="font-semibold">{t.title}</p>
                     <p className="text-xs text-slate-400">{t.metaName}</p>
                   </div>
-                  <StatusBadge status={t.status} />
+                  <StatusBadge
+                    status={
+                      t.approvals.find((a) => a.pageId === pageId)?.status ||
+                      (t.isCustom ? 'DRAFT' : t.status)
+                    }
+                  />
                 </div>
                 <p className="mt-2 text-xs text-slate-500">{t.category}</p>
                 {t.bodyStatus === 'requires_import' ? (
