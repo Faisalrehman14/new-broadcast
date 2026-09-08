@@ -25,9 +25,24 @@ Set these as **Project → Shared Variables** (applied to api, web, and worker).
 | `NEXT_PUBLIC_API_URL` | `https://your-api.up.railway.app` (web service) |
 | `META_REDIRECT_URI` | `https://your-api.up.railway.app/api/facebook/callback` |
 
-## Important
+## Web blank screen / API connection
 
-1. Add **PostgreSQL** and **Redis** plugins to the project first.
-2. Share variables with **all three** services (api, web, worker).
-3. Redeploy after saving variables.
-4. Without `DATABASE_URL` / `ENCRYPTION_KEY`, api and worker will crash on boot — that is expected.
+On **`@pagebroadcast/web`** Variables, set:
+
+| Variable | Value |
+|----------|--------|
+| `API_URL` | Public URL of your **api** service, e.g. `https://YOUR-API.up.railway.app` (no trailing slash) |
+| `NEXT_PUBLIC_API_URL` | Same as `API_URL` (optional backup) |
+
+On **`@pagebroadcast/api`** Variables, set:
+
+| Variable | Value |
+|----------|--------|
+| `WEB_ORIGIN` | `https://pagebroadcastweb-production.up.railway.app` |
+| `APP_URL` | same as WEB_ORIGIN |
+| `API_URL` | your api public URL |
+| `META_REDIRECT_URI` | `https://pagebroadcastweb-production.up.railway.app/api/facebook/callback` |
+
+Also open **api → Settings → Networking → Generate Domain** if the API has no public URL yet.
+
+The web app proxies `/api/*` to the API so the browser stays same-origin (avoids blank dashboard).

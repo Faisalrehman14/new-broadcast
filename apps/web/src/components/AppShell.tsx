@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { api, ApiClientError } from '@/lib/api';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
@@ -23,6 +24,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const [me, setMe] = useState<Me | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [activePageId, setActivePageId] = useState<string | undefined>();
 
@@ -30,6 +32,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     api<Me>('/api/auth/me')
       .then((data) => {
         setMe(data);
+        setError(null);
         const stored = typeof window !== 'undefined' ? sessionStorage.getItem(PAGE_KEY) : null;
         const initial =
           (stored && data.pages.some((p) => p.pageId === stored) && stored) ||
@@ -39,7 +42,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       .catch((err) => {
         if (err instanceof ApiClientError && err.status === 401) {
           router.replace('/login');
+          return;
         }
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'Unable to load workspace. Check API_URL on the web service.'
+        );
       })
       .finally(() => setLoading(false));
   }, [router]);
@@ -50,7 +59,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   if (loading) return <LoadingState label="Loading workspace..." />;
-  if (!me) return null;
+
+  if (!me) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-surface px-4 text-center">
+        <h1 className="text-xl font-semibold text-dark">CastMe Pro</h1>
+        <p className="max-w-md text-sm text-slate-600">
+          {error || 'Please sign in to continue.'}
+        </p>
+        <Link href="/login" className="btn-primary">
+          Go to login
+        </Link>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen bg-surface">
