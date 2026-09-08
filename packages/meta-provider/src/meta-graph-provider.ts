@@ -482,15 +482,16 @@ export class MetaGraphProvider implements MetaProvider {
           existing.find((t) => t.name.toLowerCase() === input.name.toLowerCase()) ||
           existing[0];
         if (hit) {
+          const status = hit.status === 'UNKNOWN' ? 'PENDING' : hit.status;
           return {
             externalTemplateId: hit.id || `utility_${input.name}`,
-            status: hit.status === 'UNKNOWN' ? 'APPROVED' : hit.status,
+            status,
           };
         }
-        // Fallback: treat as approved local reference so campaigns can continue.
+        // Exists but unlistable — wait path must re-check; do NOT fake APPROVED.
         return {
           externalTemplateId: `utility_existing_${input.name}`,
-          status: 'APPROVED',
+          status: 'PENDING',
         };
       }
       throw new Error(`Meta createUtilityTemplate failed: ${res.status} ${text}`);

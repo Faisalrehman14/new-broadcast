@@ -1,7 +1,7 @@
 import { loadWorkerConfig } from '@pagebroadcast/config';
 import { createMetaProvider } from '@pagebroadcast/meta-provider';
 import { renderTemplatePreview } from '@pagebroadcast/validation';
-import { createDecipheriv, createHash } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import pino from 'pino';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +30,15 @@ const meta = createMetaProvider(config.META_PROVIDER, {
   redirectUri: config.META_REDIRECT_URI,
 });
 
+function encryptSecret(plaintext: string): string {
+  const key = Buffer.from(config.ENCRYPTION_KEY, 'hex');
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const enc = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `v1:${iv.toString('base64')}:${tag.toString('base64')}:${enc.toString('base64')}`;
+}
+
 function decryptSecret(payload: string): string {
   const [version, ivB64, tagB64, dataB64] = payload.split(':');
   if (version !== 'v1' || !ivB64 || !tagB64 || !dataB64) throw new Error('Invalid encrypted payload');
@@ -40,6 +49,67 @@ function decryptSecret(payload: string): string {
     decipher.update(Buffer.from(dataB64, 'base64')),
     decipher.final(),
   ]).toString('utf8');
+}
+
+/** True Graph access-token death — not every Meta "OAuthException". */
+function isAccessTokenDeadError(msg: string): boolean {
+  return (
+    /"code"\s*:\s*190\b/.test(msg) ||
+    /\(#190\)/.test(msg) ||
+    /session has expired/i.test(msg) ||
+    /error validating access token/i.test(msg) ||
+    /access token .* expired/i.test(msg)
+  );
+}
+
+/** Remint /me/accounts once per campaign page (multi-page parallel was hammering Graph). */
+const remintedPageTokens = new Map<string, { token: string; at: number }>();
+const REMINT_TTL_MS = 10 * 60 * 1000;
+
+async function resolveCampaignPageToken(cp: {
+  id: string;
+  pageId: string;
+  platformPageId: string;
+  encryptedPageToken: string | null;
+}): Promise<string> {
+  if (!cp.encryptedPageToken) throw new Error('Missing page token');
+  const cached = remintedPageTokens.get(cp.id);
+  if (cached && Date.now() - cached.at < REMINT_TTL_MS) return cached.token;
+
+  let token = decryptSecret(cp.encryptedPageToken);
+  const page = await prisma.facebookPage.findUnique({
+    where: { id: cp.pageId },
+    include: { facebookAccount: true },
+  });
+  if (page?.facebookAccount?.encryptedAccessToken && meta.remintPageTokensFromUserToken) {
+    try {
+      const pages = await meta.remintPageTokensFromUserToken(
+        decryptSecret(page.facebookAccount.encryptedAccessToken)
+      );
+      const hit = pages.find((p) => p.id === page.platformPageId);
+      if (hit?.accessToken) {
+        token = hit.accessToken;
+        const encrypted = encryptSecret(token);
+        await prisma.$transaction([
+          prisma.broadcastCampaignPage.update({
+            where: { id: cp.id },
+            data: { encryptedPageToken: encrypted },
+          }),
+          prisma.facebookPage.update({
+            where: { id: page.id },
+            data: { encryptedPageToken: encrypted },
+          }),
+        ]);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Keep snapshot token unless Graph proves the user token is dead.
+      if (isAccessTokenDeadError(msg)) throw err;
+      logger.warn({ err, pageId: cp.pageId }, 'page token remint skipped; using stored page token');
+    }
+  }
+  remintedPageTokens.set(cp.id, { token, at: Date.now() });
+  return token;
 }
 
 const QUEUE = {
@@ -58,7 +128,6 @@ const QUEUE = {
 const PLAIN_UTILITY_TEMPLATE_NAME = 'castme_plain_utility_v1';
 const PLAIN_UTILITY_BODY = '{{1}}';
 const MS_24H = 24 * 60 * 60 * 1000;
-const OAUTH_FRESH_MS = 2 * 60 * 1000;
 
 const campaignSendQueue = new Queue(QUEUE.CAMPAIGN_SEND, { connection });
 const campaignRunQueue = new Queue(QUEUE.CAMPAIGN_RUN, { connection });
@@ -664,7 +733,8 @@ async function handleCampaignRun(job: Job) {
     }
 
     try {
-      const token = decryptSecret(cp.encryptedPageToken);
+      // Remint once per page before template work (avoids stale snapshot on multi-page).
+      const token = await resolveCampaignPageToken(cp);
       // Prefer listing an existing approved template before creating.
       const listed = await meta.listMessageTemplates({
         pageId: cp.platformPageId,
@@ -672,47 +742,52 @@ async function handleCampaignRun(job: Job) {
         name: templateName,
       });
       const existing =
+        listed.find((t) => t.name === templateName && t.status === 'APPROVED') ||
         listed.find((t) => t.name === templateName) ||
         listed.find((t) => t.name.toLowerCase() === templateName.toLowerCase());
 
       // Prefer Meta's stored language (often `en`) over campaign default `en_US`.
       const resolvedLanguage = existing?.language || language;
 
-      let created = existing
-        ? {
-            externalTemplateId: existing.id || `utility_${templateName}`,
-            status: existing.status === 'UNKNOWN' ? ('APPROVED' as const) : existing.status,
-          }
-        : await meta.createUtilityTemplate({
-            pageId: cp.platformPageId,
-            pageAccessToken: token,
-            name: templateName,
-            category: 'UTILITY',
-            language: resolvedLanguage,
-            body: templateBody,
-            exampleValues: utility.parameters?.length
-              ? utility.parameters
-              : [campaign.message || 'Example update'],
-          });
+      let created: { externalTemplateId: string; status: string };
+      if (existing) {
+        // Never treat UNKNOWN as APPROVED — that caused multi-page UTILITY flops.
+        created = {
+          externalTemplateId: existing.id || `utility_${templateName}`,
+          status: existing.status === 'UNKNOWN' ? 'PENDING' : existing.status,
+        };
+      } else {
+        created = await meta.createUtilityTemplate({
+          pageId: cp.platformPageId,
+          pageAccessToken: token,
+          name: templateName,
+          category: 'UTILITY',
+          language: resolvedLanguage,
+          body: templateBody,
+          exampleValues: utility.parameters?.length
+            ? utility.parameters
+            : [campaign.message || 'Example update'],
+        });
+      }
 
-      // Reference engine waits until APPROVED before marking templateReady.
+      // Wait until Meta reports a real APPROVED/REJECTED (incl. UNKNOWN/PENDING).
       if (created.status !== 'APPROVED' && created.status !== 'REJECTED') {
         await prisma.broadcastCampaign.update({
           where: { id: campaignId },
           data: {
-            phaseMessage: `Still working — waiting for Meta to approve UTILITY template on Page…`,
+            phaseMessage: `Still working — waiting for Meta to approve UTILITY on ${cp.pageName}…`,
           },
         });
         const waited = await meta.waitForUtilityTemplateApproved({
           pageId: cp.platformPageId,
           pageAccessToken: token,
           templateName,
-          retries: 20,
+          retries: 25,
           intervalMs: 3000,
         });
         created = {
           externalTemplateId: waited.externalTemplateId || created.externalTemplateId,
-          status: waited.status,
+          status: waited.status === 'UNKNOWN' ? 'PENDING' : waited.status,
         };
       }
 
@@ -753,27 +828,15 @@ async function handleCampaignRun(job: Job) {
               : 'UTILITY template still pending Meta review',
         },
       });
-      // Keep campaign JSON language aligned with Meta-approved template.
-      if (ready && resolvedLanguage !== language) {
-        await prisma.broadcastCampaign.update({
-          where: { id: campaignId },
-          data: {
-            utilityTemplate: {
-              ...utility,
-              name: templateName,
-              body: templateBody,
-              language: resolvedLanguage,
-            },
-          },
-        });
-      }
+      // Do NOT rewrite campaign-level language from one Page — other Pages keep their own
+      // PageUtilityTemplate.language for sends.
       if (!ready) {
         await recordCampaignFailure(
           campaignId,
           created.status === 'REJECTED' ? 'template_rejected' : 'template_pending',
           created.status === 'REJECTED'
-            ? 'UTILITY template rejected by Meta'
-            : 'UTILITY template not APPROVED yet — outside-24h sends will fail until approved',
+            ? `UTILITY template rejected on ${cp.pageName}`
+            : `UTILITY template not APPROVED yet on ${cp.pageName} — outside-24h sends will fail until approved`,
           cp.pageId
         );
       }
@@ -824,7 +887,7 @@ async function handleCampaignRun(job: Job) {
       !conn?.lastSyncedAt || Date.now() - conn.lastSyncedAt.getTime() > 6 * 60 * 60 * 1000;
     if (!contacts.length || stale) {
       try {
-        const token = decryptSecret(cp.encryptedPageToken);
+        const token = await resolveCampaignPageToken(cp);
         let cursor: string | undefined;
         let hasMore = true;
         while (hasMore) {
@@ -912,6 +975,18 @@ async function handleCampaignRun(job: Job) {
       phaseMessage: `Sending to ${totalRecipients} recipients…`,
     },
   });
+
+  // Warm page tokens once (sequential) before parallel multi-page sends.
+  const sendPages = await prisma.broadcastCampaignPage.findMany({
+    where: { campaignId, status: 'ok' },
+  });
+  for (const cp of sendPages) {
+    try {
+      await resolveCampaignPageToken(cp);
+    } catch (err) {
+      logger.warn({ err, pageId: cp.pageId }, 'pre-send remint failed');
+    }
+  }
 
   const recipients = await prisma.broadcastCampaignRecipient.findMany({
     where: { campaignId, status: 'PENDING' },
@@ -1017,28 +1092,7 @@ async function handleCampaignSend(job: Job) {
   try {
     await acquirePageSendSlot(cp.platformPageId);
 
-    let token = decryptSecret(cp.encryptedPageToken);
-    const page = await prisma.facebookPage.findUnique({
-      where: { id: cp.pageId },
-      include: { facebookAccount: true },
-    });
-    if (page?.facebookAccount?.encryptedAccessToken && meta.remintPageTokensFromUserToken) {
-      const freshAt = page.facebookAccount.oauthFreshAt?.getTime() ?? 0;
-      try {
-        const pages = await meta.remintPageTokensFromUserToken(
-          decryptSecret(page.facebookAccount.encryptedAccessToken)
-        );
-        const hit = pages.find((p) => p.id === page.platformPageId);
-        if (hit?.accessToken) token = hit.accessToken;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : '';
-        if (/190|OAuthException|session has expired/i.test(msg) && Date.now() - freshAt < OAUTH_FRESH_MS) {
-          // Ignore stale Graph 190 inside oauth fresh window; keep existing page token.
-        } else if (/190|OAuthException|session has expired/i.test(msg)) {
-          throw err;
-        }
-      }
-    }
+    const token = await resolveCampaignPageToken(cp);
 
     let result: { messageId: string };
     if (cp.templateReady) {
