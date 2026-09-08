@@ -10,9 +10,10 @@ import {
 
 describe('campaign helpers', () => {
   it('maps speed presets to delay', () => {
-    assert.equal(speedToDelayMs('safe').delayMs, 500);
+    assert.equal(speedToDelayMs('safe').delayMs, 600);
+    assert.equal(speedToDelayMs('balanced').delayMs, 300);
     assert.equal(speedToDelayMs('fast').delayMs, 150);
-    assert.equal(speedToDelayMs('turbo').delayMs, 50);
+    assert.equal(speedToDelayMs('turbo').delayMs, 80);
     assert.equal(speedToDelayMs('custom', 250).delayMs, 250);
   });
 

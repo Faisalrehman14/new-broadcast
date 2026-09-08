@@ -55,7 +55,7 @@ export default function BroadcastsPage() {
         <div>
           <h1 className="text-2xl font-semibold">Broadcasts</h1>
           <p className="text-sm text-slate-500">
-            Multi-page Messenger campaigns with UTILITY templates outside the 24h window
+            Pages → template → edit → send · multi-page Messenger UTILITY campaigns
           </p>
         </div>
         <Link href="/broadcasts/new" className="btn-primary">

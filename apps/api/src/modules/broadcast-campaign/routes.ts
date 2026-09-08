@@ -27,7 +27,7 @@ const createCampaignSchema = z.object({
   pages: z.array(z.object({ id: z.string().min(1), name: z.string().optional() })).min(1),
   message: z.string().max(2000).optional(),
   image_url: z.string().url().optional().or(z.literal('').transform(() => undefined)),
-  speed_preset: z.enum(['safe', 'fast', 'turbo', 'custom']).optional(),
+  speed_preset: z.enum(['safe', 'balanced', 'fast', 'turbo', 'custom']).optional(),
   delay_ms: z.number().int().min(0).max(60_000).optional(),
   utility_template: z
     .object({
@@ -431,6 +431,7 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
     const token = decryptSecret(page.encryptedPageToken);
     const results = [];
     for (const starter of STARTER_UTILITY_TEMPLATES) {
+      const exampleValues = [...starter.examples];
       const created = await metaProvider.createUtilityTemplate({
         pageId: page.platformPageId,
         pageAccessToken: token,
@@ -438,7 +439,7 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
         category: 'UTILITY',
         language: 'en_US',
         body: starter.body,
-        exampleValues: starter.parameters.map((p, i) => `example_${i + 1}_${p}`),
+        exampleValues,
       });
       const row = await prisma.pageUtilityTemplate.upsert({
         where: {
