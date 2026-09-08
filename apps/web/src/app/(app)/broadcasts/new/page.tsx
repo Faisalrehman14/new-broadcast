@@ -151,18 +151,27 @@ export default function NewCampaignPage() {
   }
 
   async function warmTemplate(tpl: StarterTemplate) {
-    if (tpl.id === 'custom' || !selected.length) return;
+    // Instant presets share castme_plain_utility_v1 — only warm the plain {{1}} body.
+    if (!selected.length) return;
+    if (tpl.id === 'custom') return;
     try {
+      const payload = tpl.instant
+        ? {
+            template_name: 'castme_plain_utility_v1',
+            body: '{{1}}',
+            language: 'en',
+            example_values: ['Hello from CastMe Pro'],
+          }
+        : {
+            template_name: tpl.name,
+            body: tpl.body,
+            language: 'en',
+            example_values: tpl.examples.length ? tpl.examples : tpl.parameters,
+          };
       for (const pageId of selected.slice(0, 5)) {
         await api('/api/broadcast/prepare-outside24h', {
           method: 'POST',
-          body: JSON.stringify({
-            page_id: pageId,
-            template_name: tpl.name,
-            body: tpl.body,
-            language: 'en_US',
-            example_values: tpl.examples.length ? tpl.examples : tpl.parameters,
-          }),
+          body: JSON.stringify({ page_id: pageId, ...payload }),
         }).catch(() => undefined);
       }
     } catch {
@@ -246,23 +255,43 @@ export default function NewCampaignPage() {
     setBusy(true);
     setError('');
     try {
-      for (const pageId of selected) {
-        await api('/api/broadcast/prepare-outside24h', {
-          method: 'POST',
-          body: JSON.stringify({
-            page_id: pageId,
-            template_name: 'castme_plain_utility_v1',
-            body: '{{1}}',
-            language: 'en_US',
-            example_values: ['Hello from CastMe Pro'],
-          }),
-        });
+      const res = await api<{
+        ok: number;
+        failed: number;
+        results: Array<{ page_id: string; page_name?: string; status: string; error?: string }>;
+      }>('/api/broadcast/prepare-instant', {
+        method: 'POST',
+        body: JSON.stringify({ page_ids: selected }),
+      });
+      const failedRows = res.results.filter((r) => r.status === 'error' || r.status === 'REJECTED');
+      if (failedRows.length && !res.ok) {
+        setError(
+          failedRows
+            .slice(0, 3)
+            .map((r) => `${r.page_name || r.page_id}: ${r.error || r.status}`)
+            .join(' · ')
+        );
+      } else if (failedRows.length) {
+        setToast(
+          `Instant UTILITY: ${res.ok} Pages OK, ${res.failed} need Reconnect (tick Page + Utility Messaging).`
+        );
+        setError(
+          failedRows
+            .slice(0, 2)
+            .map((r) => `${r.page_name || 'Page'}: ${r.error || r.status}`)
+            .join(' · ')
+        );
+      } else {
+        setToast(
+          `Instant plain UTILITY ready on ${res.ok} Page(s). Use Instant templates — no per-copy Meta wait.`
+        );
       }
-      setToast(
-        'Instant plain UTILITY prepared on selected Pages (shared template — no per-copy Meta wait).'
-      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Prepare failed');
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Prepare failed. Reconnect Facebook, tick every Page, grant Utility Messaging.'
+      );
     } finally {
       setBusy(false);
     }

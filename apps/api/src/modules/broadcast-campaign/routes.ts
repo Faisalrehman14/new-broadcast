@@ -16,12 +16,165 @@ import {
   consumeQuota,
 } from '../../lib/campaign.js';
 import { prisma } from '../../lib/prisma.js';
-import { AppError } from '../../lib/errors.js';
-import { decryptSecret } from '../../lib/crypto.js';
+import { AppError, mapMetaError } from '../../lib/errors.js';
+import { decryptSecret, encryptSecret } from '../../lib/crypto.js';
 import { metaProvider } from '../../lib/meta.js';
 import { enqueue, QUEUE_NAMES } from '../../lib/queues.js';
 import { writeAuditLog } from '../../lib/audit.js';
 import { assertUserOwnsPage } from '../../lib/ownership.js';
+import { logger } from '../../lib/logger.js';
+
+async function remintPageAccessToken(page: {
+  id: string;
+  platformPageId: string;
+  encryptedPageToken: string;
+  facebookAccountId: string;
+}): Promise<string> {
+  let token = decryptSecret(page.encryptedPageToken);
+  try {
+    const account = await prisma.facebookAccount.findUnique({
+      where: { id: page.facebookAccountId },
+    });
+    if (account?.encryptedAccessToken && metaProvider.remintPageTokensFromUserToken) {
+      const pages = await metaProvider.remintPageTokensFromUserToken(
+        decryptSecret(account.encryptedAccessToken)
+      );
+      const hit = pages.find((p) => p.id === page.platformPageId);
+      if (hit?.accessToken) {
+        token = hit.accessToken;
+        await prisma.facebookPage.update({
+          where: { id: page.id },
+          data: { encryptedPageToken: encryptSecret(token) },
+        });
+      }
+    }
+  } catch (err) {
+    logger.warn({ err, pageId: page.id }, 'prepare: page token remint skipped');
+  }
+  return token;
+}
+
+/** Ensure Instant plain UTILITY exists on a Page — list first, create only if missing. */
+async function ensurePlainUtilityOnPage(pageId: string): Promise<{
+  pageId: string;
+  status: string;
+  language: string;
+  externalId: string;
+  error?: string;
+}> {
+  const page = await prisma.facebookPage.findUniqueOrThrow({ where: { id: pageId } });
+  const name = PLAIN_UTILITY_TEMPLATE_NAME;
+  const tplBody = PLAIN_UTILITY_BODY;
+  const token = await remintPageAccessToken(page);
+
+  const langs = ['en', 'en_US'] as const;
+  for (const language of langs) {
+    const listed = await metaProvider.listMessageTemplates({
+      pageId: page.platformPageId,
+      pageAccessToken: token,
+      name,
+    });
+    const hit =
+      listed.find((t) => t.name === name && t.status === 'APPROVED') ||
+      listed.find((t) => t.name === name) ||
+      listed.find((t) => t.name.toLowerCase() === name.toLowerCase());
+    if (hit) {
+      const status =
+        hit.status === 'APPROVED' ? 'APPROVED' : hit.status === 'REJECTED' ? 'REJECTED' : 'PENDING';
+      const lang = hit.language || language;
+      const row = await prisma.pageUtilityTemplate.upsert({
+        where: {
+          pageId_templateName_language: {
+            pageId: page.id,
+            templateName: name,
+            language: lang,
+          },
+        },
+        create: {
+          pageId: page.id,
+          templateName: name,
+          language: lang,
+          externalId: hit.id || `utility_${name}`,
+          status,
+          body: tplBody,
+          category: 'UTILITY',
+        },
+        update: {
+          externalId: hit.id || `utility_${name}`,
+          status,
+          body: tplBody,
+        },
+      });
+      return {
+        pageId: page.id,
+        status: row.status,
+        language: row.language,
+        externalId: row.externalId || hit.id || `utility_${name}`,
+      };
+    }
+  }
+
+  let lastErr = 'create failed';
+  for (const language of langs) {
+    try {
+      const created = await metaProvider.createUtilityTemplate({
+        pageId: page.platformPageId,
+        pageAccessToken: token,
+        name,
+        category: 'UTILITY',
+        language,
+        body: tplBody,
+        exampleValues: ['Hello from CastMe Pro'],
+      });
+      const status =
+        created.status === 'APPROVED'
+          ? 'APPROVED'
+          : created.status === 'REJECTED'
+            ? 'REJECTED'
+            : 'PENDING';
+      const row = await prisma.pageUtilityTemplate.upsert({
+        where: {
+          pageId_templateName_language: {
+            pageId: page.id,
+            templateName: name,
+            language,
+          },
+        },
+        create: {
+          pageId: page.id,
+          templateName: name,
+          language,
+          externalId: created.externalTemplateId,
+          status,
+          body: tplBody,
+          category: 'UTILITY',
+        },
+        update: {
+          externalId: created.externalTemplateId,
+          status,
+          body: tplBody,
+        },
+      });
+      return {
+        pageId: page.id,
+        status: row.status,
+        language: row.language,
+        externalId: row.externalId || created.externalTemplateId,
+      };
+    } catch (err) {
+      lastErr = err instanceof Error ? err.message : String(err);
+      logger.warn({ err, pageId, language }, 'prepare plain UTILITY create attempt failed');
+    }
+  }
+
+  return {
+    pageId: page.id,
+    status: 'error',
+    language: 'en',
+    externalId: '',
+    error: lastErr.slice(0, 400),
+  };
+}
 
 const createCampaignSchema = z.object({
   pages: z.array(z.object({ id: z.string().min(1), name: z.string().optional() })).min(1),
@@ -383,42 +536,129 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
       .parse(request.body);
 
     await assertUserOwnsPage(user.id, body.page_id);
+
+    // Instant / plain path — never create multi-slot Instant copy as the Meta template body.
+    const wantsPlain =
+      !body.template_name ||
+      body.template_name === PLAIN_UTILITY_TEMPLATE_NAME ||
+      body.body === PLAIN_UTILITY_BODY ||
+      body.body === '{{1}}';
+
+    if (wantsPlain) {
+      const result = await ensurePlainUtilityOnPage(body.page_id);
+      if (result.status === 'error') {
+        throw new AppError(
+          'FACEBOOK_ERROR',
+          result.error ||
+            'Could not prepare Instant UTILITY on this Page. Reconnect Facebook, tick this Page, grant Utility Messaging, then try again.',
+          502,
+          { pageId: body.page_id, snippet: result.error }
+        );
+      }
+      return { template: result, instant: true };
+    }
+
     const page = await prisma.facebookPage.findUniqueOrThrow({ where: { id: body.page_id } });
-    const name = body.template_name || PLAIN_UTILITY_TEMPLATE_NAME;
+    const name = body.template_name!;
     const tplBody = body.body || PLAIN_UTILITY_BODY;
-    const created = await metaProvider.createUtilityTemplate({
-      pageId: page.platformPageId,
-      pageAccessToken: decryptSecret(page.encryptedPageToken),
-      name,
-      category: 'UTILITY',
-      language: body.language || 'en_US',
-      body: tplBody,
-      exampleValues: body.example_values || ['Hello from CastMe Pro'],
-    });
-    const row = await prisma.pageUtilityTemplate.upsert({
-      where: {
-        pageId_templateName_language: {
+    const token = await remintPageAccessToken(page);
+    const language = body.language || 'en';
+    try {
+      const listed = await metaProvider.listMessageTemplates({
+        pageId: page.platformPageId,
+        pageAccessToken: token,
+        name,
+      });
+      const existing =
+        listed.find((t) => t.name === name && t.status === 'APPROVED') ||
+        listed.find((t) => t.name === name);
+      const created = existing
+        ? {
+            externalTemplateId: existing.id || `utility_${name}`,
+            status: existing.status === 'UNKNOWN' ? 'PENDING' : existing.status,
+          }
+        : await metaProvider.createUtilityTemplate({
+            pageId: page.platformPageId,
+            pageAccessToken: token,
+            name,
+            category: 'UTILITY',
+            language,
+            body: tplBody,
+            exampleValues: body.example_values || ['Hello from CastMe Pro'],
+          });
+      const status =
+        created.status === 'APPROVED'
+          ? 'APPROVED'
+          : created.status === 'REJECTED'
+            ? 'REJECTED'
+            : 'PENDING';
+      const lang = existing?.language || language;
+      const row = await prisma.pageUtilityTemplate.upsert({
+        where: {
+          pageId_templateName_language: {
+            pageId: page.id,
+            templateName: name,
+            language: lang,
+          },
+        },
+        create: {
           pageId: page.id,
           templateName: name,
-          language: body.language || 'en_US',
+          language: lang,
+          externalId: created.externalTemplateId,
+          status,
+          body: tplBody,
+          category: 'UTILITY',
         },
-      },
-      create: {
-        pageId: page.id,
-        templateName: name,
-        language: body.language || 'en_US',
-        externalId: created.externalTemplateId,
-        status: created.status === 'APPROVED' ? 'APPROVED' : 'PENDING',
-        body: tplBody,
-        category: 'UTILITY',
-      },
-      update: {
-        externalId: created.externalTemplateId,
-        status: created.status === 'APPROVED' ? 'APPROVED' : 'PENDING',
-        body: tplBody,
-      },
-    });
-    return { template: row };
+        update: {
+          externalId: created.externalTemplateId,
+          status,
+          body: tplBody,
+        },
+      });
+      return { template: row, instant: false };
+    } catch (err) {
+      throw mapMetaError(err);
+    }
+  });
+
+  /** Batch prepare Instant plain UTILITY on many Pages — soft-fails per Page. */
+  app.post('/api/broadcast/prepare-instant', async (request) => {
+    const user = await requireUser(request);
+    requireCsrf(request);
+    await requirePermission(user, 'broadcast.send');
+    const body = z.object({ page_ids: z.array(z.string().min(1)).min(1).max(50) }).parse(request.body);
+
+    const results: Array<{
+      page_id: string;
+      page_name?: string;
+      status: string;
+      error?: string;
+    }> = [];
+
+    for (const pageId of body.page_ids) {
+      try {
+        await assertUserOwnsPage(user.id, pageId);
+        const page = await prisma.facebookPage.findUnique({ where: { id: pageId } });
+        const result = await ensurePlainUtilityOnPage(pageId);
+        results.push({
+          page_id: pageId,
+          page_name: page?.name,
+          status: result.status,
+          error: result.error,
+        });
+      } catch (err) {
+        results.push({
+          page_id: pageId,
+          status: 'error',
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    const ok = results.filter((r) => r.status === 'APPROVED' || r.status === 'PENDING').length;
+    const failed = results.filter((r) => r.status === 'error' || r.status === 'REJECTED').length;
+    return { results, ok, failed, template_name: PLAIN_UTILITY_TEMPLATE_NAME };
   });
 
   app.post('/api/broadcast/prepare-starter-pack', async (request) => {
