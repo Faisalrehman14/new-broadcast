@@ -133,19 +133,89 @@ export async function broadcastRoutes(app: FastifyInstance) {
     const user = await requireUser(request);
     const { id } = request.params as { id: string };
     const b = await assertUserOwnsBroadcast(user.id, id);
-    const total = b.totalRecipients || 1;
-    const done = b.sentCount + b.failedCount;
+
+    const groups = await prisma.broadcastRecipient.groupBy({
+      by: ['status'],
+      where: { broadcastId: id },
+      _count: { _all: true },
+    });
+    const byStatus: Record<string, number> = {};
+    for (const g of groups) byStatus[g.status] = g._count._all;
+
+    const pending = byStatus.PENDING ?? 0;
+    const retrying = byStatus.RETRYING ?? 0;
+    const sending = byStatus.SENDING ?? 0;
+    const sent = (byStatus.SENT ?? 0) + (byStatus.DELIVERED ?? 0) + (byStatus.READ ?? 0);
+    const delivered = (byStatus.DELIVERED ?? 0) + (byStatus.READ ?? 0) + (byStatus.SENT ?? 0);
+    const failed = byStatus.FAILED ?? 0;
+    const skipped = byStatus.SKIPPED ?? 0;
+    const queued = pending + retrying;
+    const total = Object.values(byStatus).reduce((a, n) => a + n, 0) || b.totalRecipients;
+    const done = sent + failed + skipped;
+    const percent = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+    const active = ['QUEUED', 'RUNNING', 'PAUSING'].includes(b.status);
+
+    // Keep denormalized counters aligned with recipient truth for list views.
+    if (
+      b.sentCount !== sent ||
+      b.failedCount !== failed ||
+      b.queuedCount !== queued ||
+      b.sendingCount !== sending ||
+      b.deliveredCount !== delivered
+    ) {
+      await prisma.broadcast.update({
+        where: { id },
+        data: {
+          sentCount: sent,
+          failedCount: failed,
+          queuedCount: queued,
+          sendingCount: sending,
+          deliveredCount: delivered,
+          totalRecipients: total || b.totalRecipients,
+        },
+      });
+    }
+
+    let summary = `Ready — ${total} recipients`;
+    if (b.status === 'QUEUED') {
+      summary = active && done === 0
+        ? `Queued — waiting for worker to start sending (${total} recipients)`
+        : `Queued — ${sent} sent, ${failed} failed, ${queued} waiting`;
+    } else if (b.status === 'RUNNING') {
+      summary = `Sending now — ${sent} sent · ${failed} failed · ${sending} sending · ${queued} left`;
+    } else if (b.status === 'COMPLETED') {
+      summary = `Finished — ${sent} sent, ${failed} failed`;
+    } else if (b.status === 'PARTIALLY_COMPLETED') {
+      summary = `Finished with errors — ${sent} sent, ${failed} failed`;
+    } else if (b.status === 'FAILED') {
+      summary = `Failed — ${failed} failed, ${sent} sent`;
+    } else if (b.status === 'PAUSED') {
+      summary = `Paused — ${sent} sent, ${failed} failed, ${queued} remaining`;
+    } else if (b.status === 'CANCELLED') {
+      summary = `Cancelled — ${sent} sent before cancel, ${failed} failed`;
+    } else if (b.status === 'APPROVED') {
+      summary = `Approved — press Start Broadcast to send to ${b.totalRecipients || total} contacts`;
+    }
+
     return {
       status: b.status,
-      total: b.totalRecipients,
-      queued: b.queuedCount,
-      sending: b.sendingCount,
-      sent: b.sentCount,
-      delivered: b.deliveredCount,
-      failed: b.failedCount,
+      total,
+      queued,
+      pending,
+      retrying,
+      sending,
+      sent,
+      delivered,
+      failed,
+      skipped,
       read: b.readCount,
       responses: b.responseCount,
-      percent: Math.min(100, Math.round((done / total) * 100)),
+      percent,
+      done,
+      remaining: Math.max(0, total - done),
+      active,
+      summary,
+      updatedAt: new Date().toISOString(),
     };
   });
 
@@ -153,17 +223,42 @@ export async function broadcastRoutes(app: FastifyInstance) {
     const user = await requireUser(request);
     const { id } = request.params as { id: string };
     await assertUserOwnsBroadcast(user.id, id);
-    const q = request.query as { page?: string; pageSize?: string };
+    const q = request.query as { page?: string; pageSize?: string; status?: string };
     const page = Number(q.page || 1);
     const pageSize = Math.min(Number(q.pageSize || 50), 100);
+    const allowed = new Set([
+      'PENDING',
+      'SENDING',
+      'SENT',
+      'DELIVERED',
+      'READ',
+      'FAILED',
+      'RETRYING',
+      'SKIPPED',
+    ]);
+    const where: {
+      broadcastId: string;
+      status?:
+        | 'PENDING'
+        | 'SENDING'
+        | 'SENT'
+        | 'DELIVERED'
+        | 'READ'
+        | 'FAILED'
+        | 'RETRYING'
+        | 'SKIPPED';
+    } = { broadcastId: id };
+    if (q.status && allowed.has(q.status)) {
+      where.status = q.status as typeof where.status;
+    }
     const [total, data] = await Promise.all([
-      prisma.broadcastRecipient.count({ where: { broadcastId: id } }),
+      prisma.broadcastRecipient.count({ where }),
       prisma.broadcastRecipient.findMany({
-        where: { broadcastId: id },
+        where,
         include: {
           contact: { select: { id: true, name: true, profileImage: true, platformUserId: true } },
         },
-        orderBy: { createdAt: 'asc' },
+        orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }],
         skip: (page - 1) * pageSize,
         take: pageSize,
       }),

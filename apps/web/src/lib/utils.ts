@@ -32,6 +32,7 @@ export const statusStyles: Record<string, string> = {
   QUEUED: 'bg-blue-100 text-blue-800',
   RUNNING: 'bg-blue-100 text-blue-800',
   PAUSED: 'bg-slate-100 text-slate-700',
+  PAUSING: 'bg-slate-100 text-slate-700',
   COMPLETED: 'bg-emerald-100 text-emerald-800',
   PARTIALLY_COMPLETED: 'bg-amber-100 text-amber-800',
   FAILED: 'bg-red-100 text-red-800',
@@ -40,4 +41,10 @@ export const statusStyles: Record<string, string> = {
   SYNCING: 'bg-blue-100 text-blue-800',
   ACTIVE: 'bg-emerald-100 text-emerald-800',
   INACTIVE: 'bg-slate-100 text-slate-600',
+  SENDING: 'bg-blue-100 text-blue-800',
+  SENT: 'bg-emerald-100 text-emerald-800',
+  DELIVERED: 'bg-emerald-100 text-emerald-800',
+  READ: 'bg-emerald-100 text-emerald-800',
+  RETRYING: 'bg-amber-100 text-amber-800',
+  SKIPPED: 'bg-slate-100 text-slate-600',
 };

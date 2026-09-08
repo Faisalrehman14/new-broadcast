@@ -3,13 +3,14 @@ import { statusStyles, cn } from '@/lib/utils';
 const labels: Record<string, string> = {
   DRAFT: 'Draft',
   PENDING_APPROVAL: 'Pending Approval',
-  PENDING: 'Pending',
+  PENDING: 'Waiting',
   APPROVED: 'Approved',
   REJECTED: 'Rejected',
   SCHEDULED: 'Scheduled',
   QUEUED: 'Queued',
-  RUNNING: 'Running',
+  RUNNING: 'Sending',
   PAUSED: 'Paused',
+  PAUSING: 'Pausing',
   COMPLETED: 'Completed',
   PARTIALLY_COMPLETED: 'Partially Completed',
   FAILED: 'Failed',
@@ -22,6 +23,12 @@ const labels: Record<string, string> = {
   IN_PROGRESS: 'In Progress',
   RESOLVED: 'Resolved',
   CLOSED: 'Closed',
+  SENDING: 'Sending',
+  SENT: 'Sent',
+  DELIVERED: 'Delivered',
+  READ: 'Read',
+  RETRYING: 'Retrying',
+  SKIPPED: 'Skipped',
 };
 
 export function StatusBadge({ status }: { status: string }) {
