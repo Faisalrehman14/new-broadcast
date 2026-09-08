@@ -4,7 +4,7 @@ import { connectPagesSchema } from '@pagebroadcast/validation';
 import { requireUser } from '../../lib/auth.js';
 import { config } from '../../lib/config.js';
 import { encryptSecret } from '../../lib/crypto.js';
-import { AppError, mapMetaError } from '../../lib/errors.js';
+import { AppError, mapMetaError, oauthConnectErrorSlug } from '../../lib/errors.js';
 import { metaProvider } from '../../lib/meta.js';
 import { prisma } from '../../lib/prisma.js';
 import { writeAuditLog } from '../../lib/audit.js';
@@ -119,17 +119,16 @@ export async function facebookRoutes(app: FastifyInstance) {
       const mapped = mapMetaError(err);
       const msg = err instanceof Error ? err.message : String(err);
       logger.error(
-        { err, code: mapped.code, requestId: request.id, metaRedirect: config.META_REDIRECT_URI },
+        {
+          err,
+          code: mapped.code,
+          requestId: request.id,
+          metaRedirect: config.META_REDIRECT_URI,
+          snippet: msg.slice(0, 400),
+        },
         'facebook oauth callback failed'
       );
-      let qErr = 'facebook';
-      if (mapped.code === 'FACEBOOK_EXPIRED') qErr = 'expired';
-      else if (/token exchange failed/i.test(msg)) qErr = 'token';
-      else if (/long-lived/i.test(msg)) qErr = 'long_lived';
-      else if (/getAuthorizedUser/i.test(msg)) qErr = 'profile';
-      else if (/encrypt|ENCRYPTION/i.test(msg)) qErr = 'config';
-      else if (/redirect_uri/i.test(msg)) qErr = 'redirect';
-      return reply.redirect(`${config.APP_URL}/connect?error=${qErr}`);
+      return reply.redirect(`${config.APP_URL}/connect?error=${oauthConnectErrorSlug(err)}`);
     }
   });
 

@@ -10,9 +10,12 @@ const ERROR_COPY: Record<string, string> = {
   denied:
     'Facebook authorization was cancelled. Try again and approve all requested Pages + Utility Messaging.',
   invalid_state: 'Your connect session expired. Click Connect Facebook again.',
-  expired: 'Your Facebook session expired. Reconnect and approve permissions again.',
+  expired:
+    'Your stored Facebook access token is invalid. Click Connect Facebook again and approve all permissions.',
   token:
     'Facebook code→token exchange failed. In Railway set META_REDIRECT_URI exactly to https://pagebroadcastweb-production.up.railway.app/api/facebook/callback and add the same URI under Meta → Facebook Login → Valid OAuth Redirect URIs. Also verify META_APP_ID / META_APP_SECRET.',
+  secret:
+    'META_APP_SECRET looks wrong. Copy a fresh App Secret from Meta → Settings → Basic, set it on the API service, redeploy, then reconnect.',
   redirect:
     'OAuth redirect_uri mismatch. META_REDIRECT_URI and Meta Valid OAuth Redirect URIs must match exactly (no trailing slash).',
   long_lived:

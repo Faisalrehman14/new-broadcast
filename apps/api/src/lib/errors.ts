@@ -31,10 +31,38 @@ export function toFriendlyMessage(code: string, fallback?: string): string {
 
 export function mapMetaError(err: unknown): AppError {
   const message = err instanceof Error ? err.message : String(err);
-  if (/190|OAuthException|session has expired/i.test(message)) {
-    return new AppError('FACEBOOK_EXPIRED', toFriendlyMessage('FACEBOOK_EXPIRED'), 401);
+  // Meta labels almost every Graph failure as type "OAuthException" — do NOT treat that as expiry.
+  // Real access-token expiry is Graph code 190 (or explicit session/token validation text).
+  const expired =
+    /"code"\s*:\s*190\b/.test(message) ||
+    /\(#190\)/.test(message) ||
+    /error_subcode"\s*:\s*463\b/.test(message) || // session invalidated
+    /error_subcode"\s*:\s*467\b/.test(message) || // invalid/expired token
+    /session has expired/i.test(message) ||
+    /error validating access token/i.test(message) ||
+    /access token .* expired/i.test(message);
+  if (expired) {
+    return new AppError('FACEBOOK_EXPIRED', toFriendlyMessage('FACEBOOK_EXPIRED'), 401, {
+      internal: message,
+    });
   }
   return new AppError('FACEBOOK_ERROR', toFriendlyMessage('FACEBOOK_ERROR'), 502, {
     internal: message,
   });
+}
+
+/** Map OAuth callback failures to connect?error= slugs (more specific than mapMetaError). */
+export function oauthConnectErrorSlug(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  if (/redirect_uri/i.test(message)) return 'redirect';
+  if (/token exchange failed/i.test(message)) return 'token';
+  if (/long-lived/i.test(message)) return 'long_lived';
+  if (/getAuthorizedUser/i.test(message)) return 'profile';
+  if (/encrypt|ENCRYPTION/i.test(message)) return 'config';
+  if (mapMetaError(err).code === 'FACEBOOK_EXPIRED') return 'expired';
+  if (/code has (been )?used|authorization code.*expired|invalid.*code/i.test(message)) {
+    return 'token';
+  }
+  if (/app secret|client_secret|invalid client/i.test(message)) return 'secret';
+  return 'facebook';
 }
