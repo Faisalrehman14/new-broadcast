@@ -22,7 +22,10 @@ import {
 } from '../../lib/email-otp.js';
 
 export async function authRoutes(app: FastifyInstance) {
-  app.post('/api/auth/register/send-otp', async (request) => {
+  app.post(
+    '/api/auth/register/send-otp',
+    { config: { rateLimit: { max: 8, timeWindow: '1 minute' } } },
+    async (request) => {
     const body = z.object({ email: z.string().email().max(320) }).parse(request.body);
     const email = body.email.toLowerCase();
     const existing = await prisma.user.findUnique({ where: { email } });
@@ -38,7 +41,10 @@ export async function authRoutes(app: FastifyInstance) {
     return { ok: true, message: 'If this email can be used, a verification code was sent.' };
   });
 
-  app.post('/api/auth/register', async (request, reply) => {
+  app.post(
+    '/api/auth/register',
+    { config: { rateLimit: { max: 8, timeWindow: '1 minute' } } },
+    async (request, reply) => {
     const body = registerSchema.parse(request.body);
     const email = body.email.toLowerCase();
     const existing = await prisma.user.findUnique({ where: { email } });
@@ -77,7 +83,10 @@ export async function authRoutes(app: FastifyInstance) {
     };
   });
 
-  app.post('/api/auth/forgot-password/send-otp', async (request) => {
+  app.post(
+    '/api/auth/forgot-password/send-otp',
+    { config: { rateLimit: { max: 8, timeWindow: '1 minute' } } },
+    async (request) => {
     const body = z.object({ email: z.string().email().max(320) }).parse(request.body);
     const email = body.email.toLowerCase();
     const existing = await prisma.user.findUnique({ where: { email } });
@@ -92,7 +101,10 @@ export async function authRoutes(app: FastifyInstance) {
     return { ok: true, message: 'If an account exists, a reset code was sent.' };
   });
 
-  app.post('/api/auth/forgot-password/reset', async (request) => {
+  app.post(
+    '/api/auth/forgot-password/reset',
+    { config: { rateLimit: { max: 8, timeWindow: '1 minute' } } },
+    async (request) => {
     const body = z
       .object({
         email: z.string().email().max(320),
@@ -118,7 +130,10 @@ export async function authRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  app.post('/api/auth/login', async (request, reply) => {
+  app.post(
+    '/api/auth/login',
+    { config: { rateLimit: { max: 15, timeWindow: '1 minute' } } },
+    async (request, reply) => {
     const body = loginSchema.parse(request.body);
     const user = await prisma.user.findUnique({ where: { email: body.email.toLowerCase() } });
     const ok = user ? await verifyPassword(body.password, user.passwordHash) : false;

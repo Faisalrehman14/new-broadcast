@@ -87,6 +87,8 @@ export async function activatePlanForUser(input: {
   userId: string;
   planKey: string;
   extendSamePlan?: boolean;
+  /** When true (admin default), always refill creditsRemaining to plan limit. */
+  resetUsage?: boolean;
 }) {
   const plan = getCanonicalPlan(input.planKey);
   if (!plan || plan.key === 'free') {
@@ -102,7 +104,8 @@ export async function activatePlanForUser(input: {
     expires = addMonths(now, 1);
   }
 
-  const resetUsage = !samePlan || user.planKey === 'free';
+  const resetUsage =
+    input.resetUsage === true || !samePlan || user.planKey === 'free';
   await prisma.$transaction([
     prisma.user.update({
       where: { id: input.userId },

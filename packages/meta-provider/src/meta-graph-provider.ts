@@ -25,7 +25,7 @@ export class MetaGraphProvider implements MetaProvider {
     return `https://graph.facebook.com/${this.config.graphVersion}`;
   }
 
-  getOAuthUrl(state: string, redirectUri: string): string {
+  getOAuthUrl(state: string, redirectUri: string, options?: { rerequest?: boolean }): string {
     const params = new URLSearchParams({
       client_id: this.config.appId,
       redirect_uri: redirectUri,
@@ -33,6 +33,10 @@ export class MetaGraphProvider implements MetaProvider {
       scope: META_OAUTH_SCOPES.join(','),
       response_type: 'code',
     });
+    // Reconnect / missing Utility Messaging — force Meta permission dialog again.
+    if (options?.rerequest !== false) {
+      params.set('auth_type', 'rerequest');
+    }
     return `https://www.facebook.com/${this.config.graphVersion}/dialog/oauth?${params}`;
   }
 
@@ -53,21 +57,13 @@ export class MetaGraphProvider implements MetaProvider {
       expires_in?: number;
       token_type?: string;
     };
-    const short = {
-      accessToken: data.access_token,
-      expiresIn: data.expires_in,
+    // Always convert short-lived (~1–2h) → long-lived (~60d). Never store short-lived silently.
+    const longLived = await this.exchangeLongLivedUserToken(data.access_token);
+    return {
+      accessToken: longLived.accessToken,
+      expiresIn: longLived.expiresIn ?? data.expires_in ?? 60 * 24 * 60 * 60,
       tokenType: data.token_type,
     };
-    try {
-      const longLived = await this.exchangeLongLivedUserToken(short.accessToken);
-      return {
-        accessToken: longLived.accessToken,
-        expiresIn: longLived.expiresIn ?? short.expiresIn,
-        tokenType: short.tokenType,
-      };
-    } catch {
-      return short;
-    }
   }
 
   async exchangeLongLivedUserToken(shortLivedToken: string) {

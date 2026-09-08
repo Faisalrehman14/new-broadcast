@@ -26,7 +26,7 @@ export class MockMetaProvider implements MetaProvider {
 
   constructor(private readonly config: Partial<MetaProviderConfig> = {}) {}
 
-  getOAuthUrl(state: string, redirectUri: string): string {
+  getOAuthUrl(state: string, redirectUri: string, _options?: { rerequest?: boolean }): string {
     const base = this.config.redirectUri?.replace('/api/facebook/callback', '') ?? 'http://localhost:4000';
     const params = new URLSearchParams({
       code: `mock_code_${randomUUID()}`,
@@ -37,8 +37,8 @@ export class MockMetaProvider implements MetaProvider {
 
   async exchangeCodeForToken(_code: string) {
     return {
-      accessToken: `mock_user_token_${randomUUID()}`,
-      expiresIn: 60 * 60 * 24 * 60,
+      accessToken: `mock_long_lived_user_token_${randomUUID()}`,
+      expiresIn: 60 * 24 * 60 * 60,
       tokenType: 'bearer',
     };
   }

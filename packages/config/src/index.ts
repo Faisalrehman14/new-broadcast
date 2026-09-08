@@ -19,7 +19,8 @@ const baseSchema = z.object({
   META_PROVIDER: z.enum(['meta', 'mock']).default('mock'),
   BROADCAST_MESSAGES_PER_SECOND: z.coerce.number().positive().default(5),
   BROADCAST_MESSAGES_PER_MINUTE: z.coerce.number().positive().default(200),
-  BROADCAST_CONCURRENT_SENDS: z.coerce.number().int().positive().default(3),
+  // Higher default so multi-page campaigns send in parallel (per-page RPS gate still applies).
+  BROADCAST_CONCURRENT_SENDS: z.coerce.number().int().positive().default(12),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   SENTRY_DSN: z.string().optional().default(''),
   ADMIN_EMAIL: z.string().email().optional(),

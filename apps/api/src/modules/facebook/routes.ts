@@ -11,6 +11,8 @@ import { writeAuditLog } from '../../lib/audit.js';
 import { enqueue, QUEUE_NAMES } from '../../lib/queues.js';
 import { notifyUser } from '../../lib/notify.js';
 import { assertUserOwnsPage } from '../../lib/ownership.js';
+import { requireCsrf } from '../../lib/csrf.js';
+import { logger } from '../../lib/logger.js';
 
 const OAUTH_STATE_COOKIE = 'pb_oauth_state';
 
@@ -25,7 +27,7 @@ export async function facebookRoutes(app: FastifyInstance) {
       secure: config.NODE_ENV === 'production',
       maxAge: 600,
     });
-    const url = metaProvider.getOAuthUrl(state, config.META_REDIRECT_URI);
+    const url = metaProvider.getOAuthUrl(state, config.META_REDIRECT_URI, { rerequest: true });
     return reply.redirect(url);
   });
 
@@ -44,12 +46,17 @@ export async function facebookRoutes(app: FastifyInstance) {
 
   app.get('/api/facebook/callback', async (request, reply) => {
     const user = await requireUser(request);
-    const q = request.query as { code?: string; state?: string; error?: string };
+    const q = request.query as { code?: string; state?: string; error?: string; error_description?: string };
     if (q.error) {
+      logger.warn({ error: q.error, desc: q.error_description }, 'facebook oauth denied');
       return reply.redirect(`${config.APP_URL}/connect?error=denied`);
     }
     const expected = request.cookies[OAUTH_STATE_COOKIE];
     if (!q.code || !q.state || !expected || q.state !== expected) {
+      return reply.redirect(`${config.APP_URL}/connect?error=invalid_state`);
+    }
+    // Bind OAuth state to the logged-in user (prevents session fixation / cross-user replay).
+    if (!q.state.startsWith(`${user.id}.`)) {
       return reply.redirect(`${config.APP_URL}/connect?error=invalid_state`);
     }
     reply.clearCookie(OAUTH_STATE_COOKIE, { path: '/' });
@@ -59,7 +66,7 @@ export async function facebookRoutes(app: FastifyInstance) {
       const fbUser = await metaProvider.getAuthorizedUser(token.accessToken);
       const expiresAt = token.expiresIn
         ? new Date(Date.now() + token.expiresIn * 1000)
-        : null;
+        : new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
 
       await prisma.facebookAccount.upsert({
         where: {
@@ -100,7 +107,15 @@ export async function facebookRoutes(app: FastifyInstance) {
 
       return reply.redirect(`${config.APP_URL}/pages/select`);
     } catch (err) {
-      throw mapMetaError(err);
+      const mapped = mapMetaError(err);
+      logger.error(
+        { err, code: mapped.code, requestId: request.id },
+        'facebook oauth callback failed'
+      );
+      // Browser OAuth return must redirect — never dump JSON FACEBOOK_ERROR to the user.
+      const qErr =
+        mapped.code === 'FACEBOOK_EXPIRED' ? 'expired' : 'facebook';
+      return reply.redirect(`${config.APP_URL}/connect?error=${qErr}`);
     }
   });
 
@@ -160,6 +175,7 @@ export async function facebookRoutes(app: FastifyInstance) {
 
   app.post('/api/facebook/pages/connect', async (request) => {
     const user = await requireUser(request);
+    requireCsrf(request);
     const body = connectPagesSchema.parse(request.body);
     const account = await prisma.facebookAccount.findFirst({
       where: { userId: user.id, status: 'CONNECTED' },
@@ -203,23 +219,43 @@ export async function facebookRoutes(app: FastifyInstance) {
       const existing = await prisma.pageConnection.findUnique({
         where: { userId_pageId: { userId: user.id, pageId: page.id } },
       });
-      if (existing) {
-        const { activateMessengerTemplatesForPage } = await import('../../lib/template-activation.js');
-        const activated = await activateMessengerTemplatesForPage({ pageId: page.id });
-        results.push({
-          pageId: page.id,
-          status: 'already_connected',
-          templatesActivated: activated.activated,
-        });
-        continue;
-      }
 
       let webhookSubscribed = false;
       try {
         await metaProvider.subscribeWebhooks(p.id, p.accessToken);
         webhookSubscribed = true;
       } catch {
-        webhookSubscribed = false;
+        webhookSubscribed = existing?.webhookSubscribed ?? false;
+      }
+
+      const { activateMessengerTemplatesForPage } = await import('../../lib/template-activation.js');
+
+      if (existing) {
+        // Reconnect repair: refresh token already done on page row; restore connection + sync.
+        await prisma.pageConnection.update({
+          where: { id: existing.id },
+          data: {
+            status: 'SYNCING',
+            healthStatus: 'Connected',
+            webhookSubscribed,
+          },
+        });
+        const syncJob = await prisma.syncJob.create({
+          data: { pageId: page.id, status: 'PENDING', totalEstimated: 0 },
+        });
+        await enqueue(QUEUE_NAMES.FACEBOOK_SYNC, {
+          syncJobId: syncJob.id,
+          pageId: page.id,
+          userId: user.id,
+        });
+        const activated = await activateMessengerTemplatesForPage({ pageId: page.id });
+        results.push({
+          pageId: page.id,
+          status: 'reconnected',
+          syncJobId: syncJob.id,
+          templatesActivated: activated.activated,
+        });
+        continue;
       }
 
       const conn = await prisma.pageConnection.create({
@@ -241,8 +277,6 @@ export async function facebookRoutes(app: FastifyInstance) {
         userId: user.id,
       });
 
-      // Activate ready Messenger library templates so broadcasts can start without Meta HSM wait.
-      const { activateMessengerTemplatesForPage } = await import('../../lib/template-activation.js');
       const activated = await activateMessengerTemplatesForPage({ pageId: page.id });
 
       await writeAuditLog({
@@ -277,6 +311,7 @@ export async function facebookRoutes(app: FastifyInstance) {
 
   app.delete('/api/facebook/pages/:id', async (request) => {
     const user = await requireUser(request);
+    requireCsrf(request);
     const { id } = request.params as { id: string };
     const conn = await assertUserOwnsPage(user.id, id);
     await prisma.pageConnection.update({

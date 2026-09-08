@@ -30,6 +30,7 @@ type Me = {
 };
 
 const PAGE_KEY = 'pb_active_page';
+const ME_POLL_MS = 20_000;
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -40,29 +41,56 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [activePageId, setActivePageId] = useState<string | undefined>();
 
   useEffect(() => {
-    api<Me>('/api/auth/me')
-      .then((data) => {
+    let cancelled = false;
+
+    async function loadMe(opts?: { soft?: boolean }) {
+      try {
+        const data = await api<Me>('/api/auth/me');
+        if (cancelled) return;
         if (data.csrfToken) setCsrfToken(data.csrfToken);
         setMe(data);
         setError(null);
-        const stored = typeof window !== 'undefined' ? sessionStorage.getItem(PAGE_KEY) : null;
-        const initial =
-          (stored && data.pages.some((p) => p.pageId === stored) && stored) ||
-          data.pages[0]?.pageId;
-        setActivePageId(initial);
-      })
-      .catch((err) => {
+        setActivePageId((prev) => {
+          const stored = typeof window !== 'undefined' ? sessionStorage.getItem(PAGE_KEY) : null;
+          if (prev && data.pages.some((p) => p.pageId === prev)) return prev;
+          return (
+            (stored && data.pages.some((p) => p.pageId === stored) && stored) ||
+            data.pages[0]?.pageId
+          );
+        });
+      } catch (err) {
+        if (cancelled) return;
         if (err instanceof ApiClientError && err.status === 401) {
           router.replace('/login');
           return;
         }
-        setError(
-          err instanceof Error
-            ? err.message
-            : 'Unable to load workspace. Check API_URL on the web service.'
-        );
-      })
-      .finally(() => setLoading(false));
+        if (!opts?.soft) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : 'Unable to load workspace. Check API_URL on the web service.'
+          );
+        }
+      } finally {
+        if (!cancelled && !opts?.soft) setLoading(false);
+      }
+    }
+
+    void loadMe();
+    const timer = window.setInterval(() => void loadMe({ soft: true }), ME_POLL_MS);
+    const onFocus = () => void loadMe({ soft: true });
+    const onVis = () => {
+      if (document.visibilityState === 'visible') void loadMe({ soft: true });
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVis);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVis);
+    };
   }, [router]);
 
   function selectPage(id: string) {

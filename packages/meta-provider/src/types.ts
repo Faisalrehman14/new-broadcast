@@ -104,7 +104,7 @@ export interface MetaUtilityTemplateSummary {
 }
 
 export interface MetaProvider {
-  getOAuthUrl(state: string, redirectUri: string): string;
+  getOAuthUrl(state: string, redirectUri: string, options?: { rerequest?: boolean }): string;
   exchangeCodeForToken(code: string, redirectUri: string): Promise<{
     accessToken: string;
     expiresIn?: number;

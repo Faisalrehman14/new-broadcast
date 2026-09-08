@@ -11,6 +11,7 @@ import { config } from './lib/config.js';
 import { AppError, toFriendlyMessage } from './lib/errors.js';
 import { logger } from './lib/logger.js';
 import { prisma } from './lib/prisma.js';
+import { requireCsrf } from './lib/csrf.js';
 import { authRoutes } from './modules/auth/routes.js';
 import { facebookRoutes } from './modules/facebook/routes.js';
 import { contactRoutes } from './modules/contacts/routes.js';
@@ -46,6 +47,26 @@ export async function buildApp() {
   });
   await app.register(cookie, { secret: config.SESSION_SECRET });
   await app.register(rateLimit, { max: 300, timeWindow: '1 minute' });
+
+  // CSRF for cookie-authenticated mutating API calls (webhooks + public auth stay exempt).
+  app.addHook('preHandler', async (request) => {
+    const method = request.method.toUpperCase();
+    if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return;
+    const path = request.url.split('?')[0] || '';
+    if (!path.startsWith('/api/')) return;
+    if (path.startsWith('/api/webhooks')) return;
+    if (
+      path === '/api/auth/login' ||
+      path === '/api/auth/register' ||
+      path === '/api/auth/register/send-otp' ||
+      path === '/api/auth/forgot-password/send-otp' ||
+      path === '/api/auth/forgot-password/reset'
+    ) {
+      return;
+    }
+    if (!request.cookies.pb_session) return;
+    requireCsrf(request);
+  });
 
   // Allow POST/PUT with Content-Type: application/json and an empty body (common for action buttons).
   app.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {

@@ -556,6 +556,63 @@ async function recordCampaignFailure(
   });
 }
 
+/** Per-page stagger so multiple Pages send in parallel (not one global serial queue). */
+async function enqueueCampaignSends(
+  campaignId: string,
+  recipients: Array<{ id: string; campaignPageId: string }>,
+  delayMs: number,
+  jobIdSuffix = ''
+) {
+  const byPage = new Map<string, Array<{ id: string; campaignPageId: string }>>();
+  for (const r of recipients) {
+    const list = byPage.get(r.campaignPageId) || [];
+    list.push(r);
+    byPage.set(r.campaignPageId, list);
+  }
+  const delay = Math.max(0, delayMs);
+  const adds: Promise<unknown>[] = [];
+  for (const [, pageRecipients] of byPage) {
+    for (let i = 0; i < pageRecipients.length; i++) {
+      const r = pageRecipients[i]!;
+      adds.push(
+        campaignSendQueue.add(
+          QUEUE.CAMPAIGN_SEND,
+          { campaignId, recipientId: r.id },
+          {
+            delay: i * delay,
+            jobId: `csend-${r.id}${jobIdSuffix}`,
+            attempts: 5,
+            backoff: { type: 'exponential', delay: 2000 },
+            removeOnComplete: 1000,
+            removeOnFail: 5000,
+          }
+        )
+      );
+    }
+  }
+  await Promise.all(adds);
+}
+
+async function assertAndConsumeQuota(userId: string, units: number): Promise<boolean> {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (user?.planExpiresAt && user.planExpiresAt.getTime() < Date.now()) {
+    return false;
+  }
+  const updated = await prisma.userQuota.updateMany({
+    where: { userId, creditsRemaining: { gte: units } },
+    data: { creditsRemaining: { decrement: units } },
+  });
+  return updated.count > 0;
+}
+
+async function refundQuota(userId: string, units: number): Promise<void> {
+  if (units <= 0) return;
+  await prisma.userQuota.updateMany({
+    where: { userId },
+    data: { creditsRemaining: { increment: units } },
+  });
+}
+
 async function handleCampaignRun(job: Job) {
   const { campaignId } = job.data as { campaignId: string };
   const campaign = await prisma.broadcastCampaign.findUnique({
@@ -860,22 +917,7 @@ async function handleCampaignRun(job: Job) {
     where: { campaignId, status: 'PENDING' },
     orderBy: { createdAt: 'asc' },
   });
-  const delay = campaign.delayMs || 500;
-  for (let i = 0; i < recipients.length; i++) {
-    const r = recipients[i]!;
-    await campaignSendQueue.add(
-      QUEUE.CAMPAIGN_SEND,
-      { campaignId, recipientId: r.id },
-      {
-        delay: i * delay,
-        jobId: `csend-${r.id}`,
-        attempts: 5,
-        backoff: { type: 'exponential', delay: 2000 },
-        removeOnComplete: 1000,
-        removeOnFail: 5000,
-      }
-    );
-  }
+  await enqueueCampaignSends(campaignId, recipients, campaign.delayMs || 500);
 
   if (!recipients.length) {
     await prisma.broadcastCampaign.update({
@@ -922,6 +964,34 @@ async function handleCampaignSend(job: Job) {
     where: { id: recipientId },
     data: { status: 'SENDING', attemptCount: { increment: 1 } },
   });
+
+  const quotaUnits = campaign.imageUrl || campaign.attachmentId ? 2 : 1;
+  const reserved = await assertAndConsumeQuota(campaign.userId, quotaUnits);
+  if (!reserved) {
+    await prisma.$transaction([
+      prisma.broadcastCampaignRecipient.update({
+        where: { id: recipientId },
+        data: {
+          status: 'FAILED',
+          failedAt: new Date(),
+          failureReason: 'quota_exceeded',
+        },
+      }),
+      prisma.broadcastCampaign.update({
+        where: { id: campaignId },
+        data: { failedCount: { increment: 1 }, queuedCount: { decrement: 1 } },
+      }),
+    ]);
+    await recordCampaignFailure(
+      campaignId,
+      'quota_exceeded',
+      'Message quota exhausted or plan expired',
+      cp.pageId,
+      recipient.psid
+    );
+    await maybeFinalizeCampaign(campaignId);
+    return;
+  }
 
   const utility = (campaign.utilityTemplate || {}) as {
     name?: string;
@@ -1021,6 +1091,7 @@ async function handleCampaignSend(job: Job) {
         idempotencyKey: recipient.idempotencyKey,
       });
     } else {
+      await refundQuota(campaign.userId, quotaUnits);
       await prisma.broadcastCampaignRecipient.update({
         where: { id: recipientId },
         data: {
@@ -1063,6 +1134,7 @@ async function handleCampaignSend(job: Job) {
       }),
     ]);
   } catch (err) {
+    await refundQuota(campaign.userId, quotaUnits);
     const classified = classifyMetaSendError(err);
 
     if (classified.retryable) {
@@ -1172,21 +1244,7 @@ async function handleCampaignResume(job: Job) {
 
   const delay = campaign.delayMs || 500;
   const stamp = Date.now();
-  for (let i = 0; i < recipients.length; i++) {
-    const r = recipients[i]!;
-    await campaignSendQueue.add(
-      QUEUE.CAMPAIGN_SEND,
-      { campaignId, recipientId: r.id },
-      {
-        delay: i * delay,
-        jobId: `csend-${r.id}-${stamp}`,
-        attempts: 5,
-        backoff: { type: 'exponential', delay: 2000 },
-        removeOnComplete: 1000,
-        removeOnFail: 5000,
-      }
-    );
-  }
+  await enqueueCampaignSends(campaignId, recipients, delay, `-${stamp}`);
 }
 
 async function maybeFinalizeCampaign(campaignId: string) {

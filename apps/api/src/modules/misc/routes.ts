@@ -1,9 +1,11 @@
 import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import { requireUser } from '../../lib/auth.js';
 import { prisma } from '../../lib/prisma.js';
 import { supportTicketSchema } from '@pagebroadcast/validation';
 import { writeAuditLog } from '../../lib/audit.js';
 import { AppError } from '../../lib/errors.js';
+import { requireCsrf } from '../../lib/csrf.js';
 
 export async function dashboardRoutes(app: FastifyInstance) {
   app.get('/api/dashboard', async (request) => {
@@ -162,11 +164,26 @@ export async function settingsRoutes(app: FastifyInstance) {
 
   app.put('/api/settings', async (request) => {
     const user = await requireUser(request);
-    const body = request.body as Record<string, unknown>;
+    requireCsrf(request);
+    // Whitelist only — never allow toggling broadcastSend / admin-only flags via mass assignment.
+    const body = z
+      .object({
+        messagesPerSecond: z.number().int().min(1).max(30).optional(),
+        messagesPerMinute: z.number().int().min(10).max(2000).optional(),
+        concurrentSends: z.number().int().min(1).max(50).optional(),
+        maxRetries: z.number().int().min(0).max(10).optional(),
+        notifyTemplateApproved: z.boolean().optional(),
+        notifyTemplateRejected: z.boolean().optional(),
+        notifyBroadcastCompleted: z.boolean().optional(),
+        notifyBroadcastFailed: z.boolean().optional(),
+        notifyConnectionLost: z.boolean().optional(),
+        retentionDays: z.number().int().min(30).max(3650).optional(),
+      })
+      .parse(request.body ?? {});
     const settings = await prisma.userSettings.upsert({
       where: { userId: user.id },
-      create: { userId: user.id, ...(body as object) },
-      update: body as object,
+      create: { userId: user.id, ...body },
+      update: body,
     });
     await writeAuditLog({
       actorId: user.id,
@@ -180,6 +197,7 @@ export async function settingsRoutes(app: FastifyInstance) {
 
   app.post('/api/settings/logout-all', async (request) => {
     const user = await requireUser(request);
+    requireCsrf(request);
     await prisma.session.updateMany({
       where: { userId: user.id, revokedAt: null },
       data: { revokedAt: new Date() },
@@ -336,6 +354,7 @@ export async function adminRoutes(app: FastifyInstance) {
       .object({
         planKey: z.string().min(1),
         extend: z.boolean().optional(),
+        resetUsage: z.boolean().optional(),
       })
       .parse(request.body);
     if (body.planKey === 'free') {
@@ -346,6 +365,8 @@ export async function adminRoutes(app: FastifyInstance) {
         userId: id,
         planKey: body.planKey,
         extendSamePlan: body.extend,
+        // Admin plan buttons should refill messages without forcing a user refresh dance.
+        resetUsage: body.resetUsage !== false,
       });
     }
     await writeAuditLog({
