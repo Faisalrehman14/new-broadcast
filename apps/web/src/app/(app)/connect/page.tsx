@@ -7,11 +7,20 @@ import { apiUrl } from '@/lib/api';
 import { BrandLogo } from '@/components/BrandLogo';
 
 const ERROR_COPY: Record<string, string> = {
-  denied: 'Facebook authorization was cancelled. Try again and approve all requested Pages + Utility Messaging.',
+  denied:
+    'Facebook authorization was cancelled. Try again and approve all requested Pages + Utility Messaging.',
   invalid_state: 'Your connect session expired. Click Connect Facebook again.',
   expired: 'Your Facebook session expired. Reconnect and approve permissions again.',
+  token:
+    'Facebook code→token exchange failed. In Railway set META_REDIRECT_URI exactly to https://pagebroadcastweb-production.up.railway.app/api/facebook/callback and add the same URI under Meta → Facebook Login → Valid OAuth Redirect URIs. Also verify META_APP_ID / META_APP_SECRET.',
+  redirect:
+    'OAuth redirect_uri mismatch. META_REDIRECT_URI and Meta Valid OAuth Redirect URIs must match exactly (no trailing slash).',
+  long_lived:
+    'Long-lived token exchange failed — usually wrong META_APP_SECRET. Fix the secret, redeploy API, then reconnect.',
+  profile: 'Could not read your Facebook profile after login. Try again or check App permissions.',
+  config: 'Server encryption/config error. Check ENCRYPTION_KEY on the API service.',
   facebook:
-    'Facebook connect failed (often App ID/Secret, redirect URI, or long-lived token exchange). Check Meta app settings and try again.',
+    'Facebook connect failed. Check META_APP_ID, META_APP_SECRET, META_REDIRECT_URI, and Meta Valid OAuth Redirect URIs, then reconnect.',
 };
 
 function ConnectInner() {

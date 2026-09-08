@@ -48,22 +48,41 @@ export class MetaGraphProvider implements MetaProvider {
       code,
     });
     const res = await fetch(`${this.base()}/oauth/access_token?${params}`);
+    const raw = await res.text();
     if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Meta token exchange failed: ${res.status} ${text}`);
+      throw new Error(`Meta token exchange failed: ${res.status} ${raw}`);
     }
-    const data = (await res.json()) as {
-      access_token: string;
-      expires_in?: number;
-      token_type?: string;
-    };
-    // Always convert short-lived (~1–2h) → long-lived (~60d). Never store short-lived silently.
-    const longLived = await this.exchangeLongLivedUserToken(data.access_token);
-    return {
-      accessToken: longLived.accessToken,
-      expiresIn: longLived.expiresIn ?? data.expires_in ?? 60 * 24 * 60 * 60,
-      tokenType: data.token_type,
-    };
+    let data: { access_token?: string; expires_in?: number; token_type?: string; error?: unknown };
+    try {
+      data = JSON.parse(raw) as typeof data;
+    } catch {
+      throw new Error(`Meta token exchange failed: invalid JSON ${raw.slice(0, 200)}`);
+    }
+    if (!data.access_token || data.error) {
+      throw new Error(`Meta token exchange failed: ${raw.slice(0, 400)}`);
+    }
+
+    // Prefer long-lived (~60d). If exchange fails (bad secret, Graph glitch), keep short-lived
+    // so reconnect still succeeds — caller should persist expires_in accurately.
+    try {
+      const longLived = await this.exchangeLongLivedUserToken(data.access_token);
+      return {
+        accessToken: longLived.accessToken,
+        expiresIn: longLived.expiresIn ?? data.expires_in ?? 60 * 24 * 60 * 60,
+        tokenType: data.token_type,
+        longLived: true as const,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Surface for server logs; do not block OAuth completion.
+      console.error('[meta] long-lived token exchange failed; storing short-lived token', msg);
+      return {
+        accessToken: data.access_token,
+        expiresIn: data.expires_in ?? 3600,
+        tokenType: data.token_type,
+        longLived: false as const,
+      };
+    }
   }
 
   async exchangeLongLivedUserToken(shortLivedToken: string) {
@@ -74,22 +93,33 @@ export class MetaGraphProvider implements MetaProvider {
       fb_exchange_token: shortLivedToken,
     });
     const res = await fetch(`${this.base()}/oauth/access_token?${params}`);
+    const raw = await res.text();
     if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Meta long-lived token exchange failed: ${res.status} ${text}`);
+      throw new Error(`Meta long-lived token exchange failed: ${res.status} ${raw}`);
     }
-    const data = (await res.json()) as { access_token: string; expires_in?: number };
+    let data: { access_token?: string; expires_in?: number; error?: unknown };
+    try {
+      data = JSON.parse(raw) as typeof data;
+    } catch {
+      throw new Error(`Meta long-lived token exchange failed: invalid JSON ${raw.slice(0, 200)}`);
+    }
+    if (!data.access_token || data.error) {
+      throw new Error(`Meta long-lived token exchange failed: ${raw.slice(0, 400)}`);
+    }
     return { accessToken: data.access_token, expiresIn: data.expires_in };
   }
 
   async getAuthorizedUser(userAccessToken: string): Promise<MetaAuthorizedUser> {
+    // Do not request email — many apps lack email permission and /me would still work for id/name,
+    // but some Graph configs reject unknown fields under strict mode.
     const params = new URLSearchParams({
-      fields: 'id,name,email',
+      fields: 'id,name',
       access_token: userAccessToken,
     });
     const res = await fetch(`${this.base()}/me?${params}`);
-    if (!res.ok) throw new Error(`Meta getAuthorizedUser failed: ${res.status}`);
-    const data = (await res.json()) as { id: string; name: string; email?: string };
+    const raw = await res.text();
+    if (!res.ok) throw new Error(`Meta getAuthorizedUser failed: ${res.status} ${raw}`);
+    const data = JSON.parse(raw) as { id: string; name: string; email?: string };
     return { id: data.id, name: data.name, email: data.email };
   }
 

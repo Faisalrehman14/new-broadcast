@@ -67,6 +67,7 @@ export async function facebookRoutes(app: FastifyInstance) {
       const expiresAt = token.expiresIn
         ? new Date(Date.now() + token.expiresIn * 1000)
         : new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
+      const longLived = (token as { longLived?: boolean }).longLived !== false;
 
       await prisma.facebookAccount.upsert({
         where: {
@@ -80,13 +81,14 @@ export async function facebookRoutes(app: FastifyInstance) {
           status: 'CONNECTED',
           lastApiSuccessAt: new Date(),
           oauthFreshAt: new Date(),
+          lastError: longLived ? null : 'short_lived_token_fallback',
         },
         update: {
           encryptedAccessToken: encryptSecret(token.accessToken),
           tokenExpiresAt: expiresAt,
           status: 'CONNECTED',
           lastApiSuccessAt: new Date(),
-          lastError: null,
+          lastError: longLived ? null : 'short_lived_token_fallback',
           oauthFreshAt: new Date(),
         },
       });
@@ -95,7 +97,9 @@ export async function facebookRoutes(app: FastifyInstance) {
         userId: user.id,
         type: 'FACEBOOK_CONNECTED',
         title: 'Facebook connected',
-        body: 'Your Facebook account was connected successfully.',
+        body: longLived
+          ? 'Your Facebook account was connected successfully.'
+          : 'Facebook connected, but long-lived token exchange failed — reconnect again soon or verify META_APP_SECRET.',
       });
       await writeAuditLog({
         actorId: user.id,
@@ -103,18 +107,28 @@ export async function facebookRoutes(app: FastifyInstance) {
         resource: 'facebook_account',
         resourceId: fbUser.id,
         ip: request.ip,
+        metadata: { longLived },
       });
 
-      return reply.redirect(`${config.APP_URL}/pages/select`);
+      return reply.redirect(
+        longLived
+          ? `${config.APP_URL}/pages/select`
+          : `${config.APP_URL}/pages/select?warn=short_token`
+      );
     } catch (err) {
       const mapped = mapMetaError(err);
+      const msg = err instanceof Error ? err.message : String(err);
       logger.error(
-        { err, code: mapped.code, requestId: request.id },
+        { err, code: mapped.code, requestId: request.id, metaRedirect: config.META_REDIRECT_URI },
         'facebook oauth callback failed'
       );
-      // Browser OAuth return must redirect — never dump JSON FACEBOOK_ERROR to the user.
-      const qErr =
-        mapped.code === 'FACEBOOK_EXPIRED' ? 'expired' : 'facebook';
+      let qErr = 'facebook';
+      if (mapped.code === 'FACEBOOK_EXPIRED') qErr = 'expired';
+      else if (/token exchange failed/i.test(msg)) qErr = 'token';
+      else if (/long-lived/i.test(msg)) qErr = 'long_lived';
+      else if (/getAuthorizedUser/i.test(msg)) qErr = 'profile';
+      else if (/encrypt|ENCRYPTION/i.test(msg)) qErr = 'config';
+      else if (/redirect_uri/i.test(msg)) qErr = 'redirect';
       return reply.redirect(`${config.APP_URL}/connect?error=${qErr}`);
     }
   });

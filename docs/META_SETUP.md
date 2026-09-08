@@ -43,6 +43,7 @@ Permissions requested by CastMe Pro:
 - `pages_messaging`
 - `pages_manage_metadata`
 - `pages_read_engagement`
+- `pages_utility_messaging` (outside-24h UTILITY templates)
 - `business_management`
 
 For public customers (anyone’s Facebook), Meta **App Review** is required. For your own Page as admin, Development mode is enough.
@@ -67,7 +68,7 @@ Then subscribe your Page to the app.
 | `META_APP_SECRET` | your App Secret |
 | `META_GRAPH_VERSION` | `v21.0` |
 | `META_WEBHOOK_VERIFY_TOKEN` | long random string (same as Meta webhook verify token) |
-| `META_REDIRECT_URI` | `https://pagebroadcastweb-production.up.railway.app/api/facebook/callback` |
+| `META_REDIRECT_URI` | `https://pagebroadcastweb-production.up.railway.app/api/facebook/callback` (must match Meta Valid OAuth Redirect URIs **exactly**) |
 | `APP_URL` | `https://pagebroadcastweb-production.up.railway.app` |
 | `WEB_ORIGIN` | `https://pagebroadcastweb-production.up.railway.app` |
 | `API_URL` | `https://pagebroadcastapi-production.up.railway.app` |

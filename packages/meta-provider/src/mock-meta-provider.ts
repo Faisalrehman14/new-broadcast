@@ -40,6 +40,7 @@ export class MockMetaProvider implements MetaProvider {
       accessToken: `mock_long_lived_user_token_${randomUUID()}`,
       expiresIn: 60 * 24 * 60 * 60,
       tokenType: 'bearer',
+      longLived: true,
     };
   }
 

@@ -109,6 +109,7 @@ export interface MetaProvider {
     accessToken: string;
     expiresIn?: number;
     tokenType?: string;
+    longLived?: boolean;
   }>;
   exchangeLongLivedUserToken?(shortLivedToken: string): Promise<{
     accessToken: string;
