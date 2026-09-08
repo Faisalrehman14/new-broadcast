@@ -45,6 +45,20 @@ export async function buildApp() {
   await app.register(cookie, { secret: config.SESSION_SECRET });
   await app.register(rateLimit, { max: 300, timeWindow: '1 minute' });
 
+  // Allow POST/PUT with Content-Type: application/json and an empty body (common for action buttons).
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
+    try {
+      const raw = typeof body === 'string' ? body : body?.toString?.() ?? '';
+      if (!raw || !raw.trim()) {
+        done(null, {});
+        return;
+      }
+      done(null, JSON.parse(raw));
+    } catch (err) {
+      done(err as Error, undefined);
+    }
+  });
+
   app.addHook('onRequest', async (request) => {
     (request as { startTime?: number }).startTime = Date.now();
   });
@@ -92,6 +106,21 @@ export async function buildApp() {
           code: err.code,
           message: err.message,
           details: config.NODE_ENV === 'development' ? err.details : undefined,
+          requestId: request.id,
+        },
+      });
+    }
+    // Fastify JSON body parse failures (FST_ERR_CTP_EMPTY_JSON_BODY / unexpected token)
+    const anyErr = err as Error & { code?: string; statusCode?: number };
+    if (
+      anyErr.code === 'FST_ERR_CTP_EMPTY_JSON_BODY' ||
+      anyErr.code === 'FST_ERR_CTP_INVALID_JSON_BODY' ||
+      /Unexpected end of JSON|Body cannot be empty/i.test(anyErr.message || '')
+    ) {
+      return reply.code(400).send({
+        error: {
+          code: 'VALIDATION',
+          message: 'Invalid request body.',
           requestId: request.id,
         },
       });

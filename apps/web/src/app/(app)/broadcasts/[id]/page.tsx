@@ -178,12 +178,16 @@ export default function BroadcastDetailPage() {
   async function start() {
     setBusy(true);
     try {
-      await api(`/api/broadcasts/${params.id}/start`, { method: 'POST' });
+      await api(`/api/broadcasts/${params.id}/start`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
       setConfirmOpen(false);
       setMessage('Broadcast started — live counters below update every few seconds.');
       await load();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Failed to start');
+      await load().catch(() => undefined);
     } finally {
       setBusy(false);
     }

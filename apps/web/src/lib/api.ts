@@ -27,15 +27,18 @@ export class ApiClientError extends Error {
 
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const base = getApiBase();
+  const headers = new Headers(options.headers || {});
+  const hasBody = options.body !== undefined && options.body !== null && options.body !== '';
+  if (hasBody && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+
   let res: Response;
   try {
     res = await fetch(`${base}${path}`, {
       ...options,
       credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(options.headers || {}),
-      },
+      headers,
     });
   } catch {
     throw new ApiClientError(

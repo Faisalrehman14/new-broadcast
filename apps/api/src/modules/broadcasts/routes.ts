@@ -407,13 +407,17 @@ export async function broadcastRoutes(app: FastifyInstance) {
     });
 
     await enqueue(QUEUE_NAMES.BROADCAST, { broadcastId: id });
-    await notifyUser({
-      userId: user.id,
-      type: 'BROADCAST_STARTED',
-      title: 'Broadcast queued',
-      body: `${broadcast.name} is queued for sending.`,
-      metadata: { broadcastId: id },
-    });
+    try {
+      await notifyUser({
+        userId: user.id,
+        type: 'BROADCAST_STARTED',
+        title: 'Broadcast queued',
+        body: `${broadcast.name} is queued for sending.`,
+        metadata: { broadcastId: id },
+      });
+    } catch {
+      // Notification failure must not block an already-queued broadcast.
+    }
     await writeAuditLog({
       actorId: user.id,
       action: 'broadcast.started',
@@ -423,7 +427,7 @@ export async function broadcastRoutes(app: FastifyInstance) {
       metadata: { recipients: contactIds.length },
     });
 
-    return { ok: true, recipients: contactIds.length };
+    return { ok: true, recipients: contactIds.length, status: 'QUEUED' };
   });
 
   app.post('/api/broadcasts/:id/pause', async (request) => {
