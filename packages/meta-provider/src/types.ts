@@ -135,6 +135,13 @@ export interface MetaProvider {
     pageAccessToken: string;
     name?: string;
   }): Promise<MetaUtilityTemplateSummary[]>;
+  waitForUtilityTemplateApproved(params: {
+    pageId: string;
+    pageAccessToken: string;
+    templateName: string;
+    retries?: number;
+    intervalMs?: number;
+  }): Promise<MetaTemplateStatus>;
   getTemplateStatus(params: {
     pageId: string;
     pageAccessToken: string;

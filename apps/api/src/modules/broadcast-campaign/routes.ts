@@ -255,6 +255,11 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
         if (!['sending', 'syncing_leads', 'setting_up_templates', 'queued'].includes(campaign.phase)) {
           throw new AppError('INVALID_TRANSITION', `Cannot pause from ${campaign.phase}.`, 409);
         }
+        // Reset in-flight sends so resume can requeue without wiping audience.
+        await prisma.broadcastCampaignRecipient.updateMany({
+          where: { campaignId: id, status: { in: ['SENDING', 'RETRYING'] } },
+          data: { status: 'PENDING', failureReason: null },
+        });
         const updated = await prisma.broadcastCampaign.update({
           where: { id },
           data: { phase: 'paused', phaseMessage: 'Paused by user.' },
@@ -265,11 +270,36 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
         if (campaign.phase !== 'paused') {
           throw new AppError('INVALID_TRANSITION', 'Only paused campaigns can be resumed.', 409);
         }
+        const pendingLeft = await prisma.broadcastCampaignRecipient.count({
+          where: { campaignId: id, status: 'PENDING' },
+        });
+        const anyRecipients = await prisma.broadcastCampaignRecipient.count({
+          where: { campaignId: id },
+        });
         const updated = await prisma.broadcastCampaign.update({
           where: { id },
-          data: { phase: 'sending', phaseMessage: 'Resuming sends…' },
+          data: {
+            phase: anyRecipients > 0 ? 'sending' : 'queued',
+            phaseMessage:
+              anyRecipients > 0
+                ? `Resuming ${pendingLeft} pending sends…`
+                : 'Resuming — finishing prepare then send…',
+          },
         });
-        await enqueue(QUEUE_NAMES.CAMPAIGN_RUN, { campaignId: id }, { jobId: `campaign-resume-${id}-${Date.now()}` });
+        // Never re-run full prepare when recipients already exist (wipes progress).
+        if (anyRecipients > 0) {
+          await enqueue(
+            QUEUE_NAMES.CAMPAIGN_RESUME,
+            { campaignId: id },
+            { jobId: `campaign-resume-${id}-${Date.now()}` }
+          );
+        } else {
+          await enqueue(
+            QUEUE_NAMES.CAMPAIGN_RUN,
+            { campaignId: id },
+            { jobId: `campaign-rerun-${id}-${Date.now()}` }
+          );
+        }
         return { campaign: updated };
       }
       if (action === 'stop') {

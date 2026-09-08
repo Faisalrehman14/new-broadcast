@@ -9,6 +9,8 @@ import dotenv from 'dotenv';
 import { Redis } from 'ioredis';
 import { Worker, Queue, type Job } from 'bullmq';
 import { PrismaClient } from '@prisma/client';
+import { personalizeBroadcastMessage } from './lib/personalize.js';
+import { acquirePageSendSlot } from './lib/send-gate.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
@@ -47,6 +49,7 @@ const QUEUE = {
   MESSAGE_SEND: 'message-send',
   CAMPAIGN_RUN: 'campaign-run',
   CAMPAIGN_SEND: 'campaign-send',
+  CAMPAIGN_RESUME: 'campaign-resume',
   NOTIFICATIONS: 'notifications',
   ANALYTICS: 'analytics',
 } as const;
@@ -561,6 +564,13 @@ async function handleCampaignRun(job: Job) {
   if (!campaign) return;
   if (['completed', 'stopped', 'failed', 'paused'].includes(campaign.phase)) return;
 
+  // Never wipe an in-progress audience — resume path owns PENDING requeues.
+  const existingRecipients = await prisma.broadcastCampaignRecipient.count({ where: { campaignId } });
+  if (existingRecipients > 0 && campaign.phase === 'sending') {
+    await handleCampaignResume(job);
+    return;
+  }
+
   // Phase 1: setting_up_templates
   await prisma.broadcastCampaign.update({
     where: { id: campaignId },
@@ -607,7 +617,7 @@ async function handleCampaignRun(job: Job) {
         listed.find((t) => t.name === templateName) ||
         listed.find((t) => t.name.toLowerCase() === templateName.toLowerCase());
 
-      const created = existing
+      let created = existing
         ? {
             externalTemplateId: existing.id || `utility_${templateName}`,
             status: existing.status === 'UNKNOWN' ? ('APPROVED' as const) : existing.status,
@@ -623,6 +633,28 @@ async function handleCampaignRun(job: Job) {
               ? utility.parameters
               : [campaign.message || 'Example update'],
           });
+
+      // Reference engine waits until APPROVED before marking templateReady.
+      if (created.status !== 'APPROVED' && created.status !== 'REJECTED') {
+        await prisma.broadcastCampaign.update({
+          where: { id: campaignId },
+          data: {
+            phaseMessage: `Still working — waiting for Meta to approve UTILITY template on Page…`,
+          },
+        });
+        const waited = await meta.waitForUtilityTemplateApproved({
+          pageId: cp.platformPageId,
+          pageAccessToken: token,
+          templateName,
+          retries: 20,
+          intervalMs: 3000,
+        });
+        created = {
+          externalTemplateId: waited.externalTemplateId || created.externalTemplateId,
+          status: waited.status,
+        };
+      }
+
       await prisma.pageUtilityTemplate.upsert({
         where: {
           pageId_templateName_language: {
@@ -636,29 +668,40 @@ async function handleCampaignRun(job: Job) {
           templateName,
           language,
           externalId: created.externalTemplateId,
-          status: created.status === 'APPROVED' ? 'APPROVED' : 'PENDING',
+          status: created.status === 'APPROVED' ? 'APPROVED' : created.status === 'REJECTED' ? 'REJECTED' : 'PENDING',
           body: templateBody,
           category: 'UTILITY',
         },
         update: {
           externalId: created.externalTemplateId,
-          status: created.status === 'APPROVED' ? 'APPROVED' : 'PENDING',
+          status: created.status === 'APPROVED' ? 'APPROVED' : created.status === 'REJECTED' ? 'REJECTED' : 'PENDING',
           body: templateBody,
         },
       });
-      const ready =
-        created.status === 'APPROVED' ||
-        created.status === 'PENDING' ||
-        Boolean(existing);
+      const ready = created.status === 'APPROVED';
       await prisma.broadcastCampaignPage.update({
         where: { id: cp.id },
         data: {
           templateReady: ready,
           utilityTemplateName: templateName,
           status: 'ok',
-          lastError: null,
+          lastError: ready
+            ? null
+            : created.status === 'REJECTED'
+              ? 'UTILITY template rejected by Meta'
+              : 'UTILITY template still pending Meta review',
         },
       });
+      if (!ready) {
+        await recordCampaignFailure(
+          campaignId,
+          created.status === 'REJECTED' ? 'template_rejected' : 'template_pending',
+          created.status === 'REJECTED'
+            ? 'UTILITY template rejected by Meta'
+            : 'UTILITY template not APPROVED yet — outside-24h sends will fail until approved',
+          cp.pageId
+        );
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'template setup failed';
       // Keep page usable for in-24h RESPONSE sends; Utility may still be missing.
@@ -872,8 +915,11 @@ async function handleCampaignSend(job: Job) {
   const within24h =
     recipient.lastInteractionAt &&
     Date.now() - new Date(recipient.lastInteractionAt).getTime() <= MS_24H;
+  const personalized = personalizeBroadcastMessage(campaign.message || 'Update', recipient.name);
 
   try {
+    await acquirePageSendSlot(cp.platformPageId);
+
     let token = decryptSecret(cp.encryptedPageToken);
     const page = await prisma.facebookPage.findUnique({
       where: { id: cp.pageId },
@@ -899,31 +945,50 @@ async function handleCampaignSend(job: Job) {
 
     let result: { messageId: string };
     if (cp.templateReady) {
+      // Prefer UTILITY first (reference Messenger tools) — not RESPONSE-first.
       const params =
         templateName === PLAIN_UTILITY_TEMPLATE_NAME
-          ? [campaign.message || 'Update']
+          ? [personalized]
           : (utility.parameters || []).map((p, idx) => {
-              if (idx === 0) return recipient.name || p || 'Customer';
-              return p;
+              if (idx === 0) {
+                return personalizeBroadcastMessage(p || personalized, recipient.name) ||
+                  recipient.name ||
+                  'Customer';
+              }
+              return personalizeBroadcastMessage(p, recipient.name) || p;
             });
       if (templateName !== PLAIN_UTILITY_TEMPLATE_NAME && params.length === 0) {
-        params.push(recipient.name || 'Customer');
+        params.push(recipient.name || personalized || 'Customer');
       }
-      result = await meta.sendUtilityMessage({
-        pageId: cp.platformPageId,
-        pageAccessToken: token,
-        recipientPsid: recipient.psid,
-        templateName,
-        languageCode: utility.language || 'en_US',
-        bodyParameters: params.length ? params : [campaign.message || 'Update'],
-        idempotencyKey: recipient.idempotencyKey,
-      });
+      try {
+        result = await meta.sendUtilityMessage({
+          pageId: cp.platformPageId,
+          pageAccessToken: token,
+          recipientPsid: recipient.psid,
+          templateName,
+          languageCode: utility.language || 'en_US',
+          bodyParameters: params.length ? params : [personalized],
+          idempotencyKey: recipient.idempotencyKey,
+        });
+      } catch (utilErr) {
+        // In-window fallback only — matches reference campaign-engine.
+        if (!within24h) throw utilErr;
+        result = await meta.sendResponseMessage({
+          pageId: cp.platformPageId,
+          pageAccessToken: token,
+          recipientPsid: recipient.psid,
+          text: personalized || undefined,
+          imageUrl: campaign.imageUrl || undefined,
+          attachmentId: campaign.attachmentId || undefined,
+          idempotencyKey: `${recipient.idempotencyKey}:resp`,
+        });
+      }
     } else if (within24h) {
       result = await meta.sendResponseMessage({
         pageId: cp.platformPageId,
         pageAccessToken: token,
         recipientPsid: recipient.psid,
-        text: campaign.message || undefined,
+        text: personalized || undefined,
         imageUrl: campaign.imageUrl || undefined,
         attachmentId: campaign.attachmentId || undefined,
         idempotencyKey: recipient.idempotencyKey,
@@ -1004,6 +1069,51 @@ async function handleCampaignSend(job: Job) {
   await maybeFinalizeCampaign(campaignId);
 }
 
+/** Resume: requeue PENDING only — never wipe audience / re-run full prepare. */
+async function handleCampaignResume(job: Job) {
+  const { campaignId } = job.data as { campaignId: string };
+  const campaign = await prisma.broadcastCampaign.findUnique({ where: { id: campaignId } });
+  if (!campaign) return;
+  if (['completed', 'stopped', 'failed', 'paused'].includes(campaign.phase)) return;
+
+  const recipients = await prisma.broadcastCampaignRecipient.findMany({
+    where: { campaignId, status: 'PENDING' },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  if (!recipients.length) {
+    await maybeFinalizeCampaign(campaignId);
+    return;
+  }
+
+  await prisma.broadcastCampaign.update({
+    where: { id: campaignId },
+    data: {
+      phase: 'sending',
+      phaseMessage: `Resuming — ${recipients.length} pending sends…`,
+      queuedCount: recipients.length,
+    },
+  });
+
+  const delay = campaign.delayMs || 500;
+  const stamp = Date.now();
+  for (let i = 0; i < recipients.length; i++) {
+    const r = recipients[i]!;
+    await campaignSendQueue.add(
+      QUEUE.CAMPAIGN_SEND,
+      { campaignId, recipientId: r.id },
+      {
+        delay: i * delay,
+        jobId: `csend-${r.id}-${stamp}`,
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 2000 },
+        removeOnComplete: 1000,
+        removeOnFail: 5000,
+      }
+    );
+  }
+}
+
 async function maybeFinalizeCampaign(campaignId: string) {
   const c = await prisma.broadcastCampaign.findUnique({ where: { id: campaignId } });
   if (!c || ['completed', 'stopped', 'failed', 'paused'].includes(c.phase)) return;
@@ -1056,6 +1166,7 @@ const workers = [
   makeWorker(QUEUE.MESSAGE_SEND, handleMessageSend, config.BROADCAST_CONCURRENT_SENDS),
   makeWorker(QUEUE.CAMPAIGN_RUN, handleCampaignRun, 1),
   makeWorker(QUEUE.CAMPAIGN_SEND, handleCampaignSend, config.BROADCAST_CONCURRENT_SENDS),
+  makeWorker(QUEUE.CAMPAIGN_RESUME, handleCampaignResume, 1),
   makeWorker(QUEUE.NOTIFICATIONS, async () => undefined, 1),
   makeWorker(QUEUE.ANALYTICS, async () => undefined, 1),
 ];

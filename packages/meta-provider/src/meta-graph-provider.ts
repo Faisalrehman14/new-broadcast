@@ -249,25 +249,32 @@ export class MetaGraphProvider implements MetaProvider {
   }
 
   async sendUtilityMessage(input: MetaSendUtilityInput): Promise<MetaSendResult> {
-    const payload = {
-      recipient: { id: input.recipientPsid },
-      messaging_type: 'UTILITY',
-      message: {
-        template: {
-          name: input.templateName,
-          language: { code: input.languageCode || 'en_US' },
-          components: input.bodyParameters.length
-            ? [
-                {
-                  type: 'body',
-                  parameters: input.bodyParameters.map((text) => ({ type: 'text', text })),
-                },
-              ]
-            : [],
-        },
+    const message = {
+      template: {
+        name: input.templateName,
+        language: { code: input.languageCode || 'en_US' },
+        components: input.bodyParameters.length
+          ? [
+              {
+                type: 'body',
+                parameters: input.bodyParameters.map((text) => ({
+                  type: 'text',
+                  text: String(text).slice(0, 1000),
+                })),
+              },
+            ]
+          : [],
       },
     };
-    return this.postMessage(input.pageId, input.pageAccessToken, payload, input.idempotencyKey);
+    // Reference Messenger tools use form-urlencoded for UTILITY campaign sends.
+    return this.postMessageForm(
+      input.pageId,
+      input.pageAccessToken,
+      input.recipientPsid,
+      message,
+      'UTILITY',
+      input.idempotencyKey
+    );
   }
 
   async sendResponseMessage(input: MetaSendResponseInput): Promise<MetaSendResult> {
@@ -294,6 +301,46 @@ export class MetaGraphProvider implements MetaProvider {
       message,
     };
     return this.postMessage(input.pageId, input.pageAccessToken, payload, input.idempotencyKey);
+  }
+
+  /**
+   * Poll Page message_templates until APPROVED/REJECTED or retries exhausted.
+   * Ported from fb-page-manager waitForApproved.
+   */
+  async waitForUtilityTemplateApproved(params: {
+    pageId: string;
+    pageAccessToken: string;
+    templateName: string;
+    retries?: number;
+    intervalMs?: number;
+  }): Promise<MetaTemplateStatus> {
+    const retries = params.retries ?? 15;
+    const intervalMs = params.intervalMs ?? 4000;
+    let last: MetaTemplateStatus = {
+      externalTemplateId: `utility_${params.templateName}`,
+      status: 'PENDING',
+      name: params.templateName,
+    };
+    for (let i = 0; i <= retries; i++) {
+      if (i > 0 && intervalMs) await new Promise((r) => setTimeout(r, intervalMs));
+      const list = await this.listMessageTemplates({
+        pageId: params.pageId,
+        pageAccessToken: params.pageAccessToken,
+        name: params.templateName,
+      });
+      const hit =
+        list.find((t) => t.name === params.templateName) ||
+        list.find((t) => t.name.toLowerCase() === params.templateName.toLowerCase());
+      if (hit) {
+        last = {
+          externalTemplateId: hit.id || last.externalTemplateId,
+          status: hit.status,
+          name: hit.name,
+        };
+        if (hit.status === 'APPROVED' || hit.status === 'REJECTED') return last;
+      }
+    }
+    return last;
   }
 
   async submitTemplate(input: MetaSubmitTemplateInput): Promise<{ externalTemplateId: string }> {
@@ -487,6 +534,51 @@ export class MetaGraphProvider implements MetaProvider {
     }
     const data = (await res.json()) as { message_id: string; recipient_id: string };
     return { messageId: data.message_id, recipientId: data.recipient_id };
+  }
+
+  /** Form-urlencoded send — same transport as working Messenger broadcast tools. */
+  private async postMessageForm(
+    pageId: string,
+    pageAccessToken: string,
+    recipientPsid: string,
+    message: Record<string, unknown>,
+    messagingType: 'UTILITY' | 'RESPONSE' | 'MESSAGE_TAG',
+    idempotencyKey: string,
+    tag?: string
+  ): Promise<MetaSendResult> {
+    const form = new URLSearchParams();
+    form.append('recipient', JSON.stringify({ id: recipientPsid }));
+    form.append('message', JSON.stringify(message));
+    form.append('messaging_type', messagingType);
+    form.append('access_token', pageAccessToken);
+    if (tag) form.append('tag', tag);
+
+    const res = await fetch(`${this.base()}/${pageId}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'X-Idempotency-Key': idempotencyKey,
+      },
+      body: form.toString(),
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      const err = new Error(`Meta send failed: ${res.status} ${errText}`) as Error & {
+        status?: number;
+        retryable?: boolean;
+      };
+      err.status = res.status;
+      err.retryable = res.status === 429 || res.status >= 500 || /80001|80006|rate limit/i.test(errText);
+      throw err;
+    }
+    const data = (await res.json()) as { message_id?: string; recipient_id?: string; error?: unknown };
+    if (data.error) {
+      throw new Error(`Meta send failed: ${JSON.stringify(data.error)}`);
+    }
+    return {
+      messageId: data.message_id || idempotencyKey,
+      recipientId: data.recipient_id || recipientPsid,
+    };
   }
 }
 

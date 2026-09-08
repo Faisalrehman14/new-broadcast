@@ -18,3 +18,4 @@ tmp
 *.tsbuildinfo
 sentry.properties
 .data
+for broadcast/

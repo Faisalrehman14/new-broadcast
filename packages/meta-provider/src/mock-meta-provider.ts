@@ -195,6 +195,31 @@ export class MockMetaProvider implements MetaProvider {
     return out;
   }
 
+  async waitForUtilityTemplateApproved(params: {
+    pageId: string;
+    pageAccessToken: string;
+    templateName: string;
+  }): Promise<MetaTemplateStatus> {
+    const list = await this.listMessageTemplates({
+      pageId: params.pageId,
+      pageAccessToken: params.pageAccessToken,
+      name: params.templateName,
+    });
+    const hit = list.find((t) => t.name === params.templateName);
+    if (hit) {
+      return {
+        externalTemplateId: hit.id || `utility_${params.templateName}`,
+        status: hit.status,
+        name: hit.name,
+      };
+    }
+    return {
+      externalTemplateId: `utility_${params.templateName}`,
+      status: 'APPROVED',
+      name: params.templateName,
+    };
+  }
+
   async getTemplateStatus(params: {
     pageId: string;
     pageAccessToken: string;

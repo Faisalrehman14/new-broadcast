@@ -10,6 +10,7 @@ export const QUEUE_NAMES = {
   MESSAGE_SEND: 'message-send',
   CAMPAIGN_RUN: 'campaign-run',
   CAMPAIGN_SEND: 'campaign-send',
+  CAMPAIGN_RESUME: 'campaign-resume',
   ANALYTICS: 'analytics',
   NOTIFICATIONS: 'notifications',
 } as const;
