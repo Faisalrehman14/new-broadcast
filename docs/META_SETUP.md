@@ -83,16 +83,21 @@ Redeploy **api** and **worker** after saving.
 5. Templates auto-activate for that Page (or open **Templates → Approve all for this Page**)  
 6. Create broadcast → **Start** immediately  
 
-## How sending works (Messenger, not WhatsApp HSM)
+## How sending works (Messenger Utility)
 
-Tools like MyAimMyDream send plain Messenger text via the Page Send API. CastMe Pro does the same:
+CastMe Pro campaigns use Meta **UTILITY** message templates for outside-24h delivery:
 
-- Ready library templates are **activated per Page** (no WhatsApp `message_templates` review wait)
-- Sends use `/me/messages` with `UPDATE` inside the 24h window, or `MESSAGE_TAG` outside it
-- Meta still rejects ineligible recipients; failures show on the broadcast recipient list
+1. Connect Facebook with `pages_utility_messaging` granted (tick every Page in the Meta picker)
+2. Prepare starter / plain UTILITY templates per Page (`POST /api/broadcast/prepare-starter-pack`)
+3. Create a campaign — worker phases: templates → sync leads → send
+4. Inside 24h: `RESPONSE` text/image is used when Utility is not required
+5. Outside 24h: named UTILITY template or plain `{{1}}` freeform wrapper
+
+Tokens never leave the server. See [BROADCAST_CAMPAIGNS.md](./BROADCAST_CAMPAIGNS.md).
 
 ## Important Meta limits
 
-- Messaging must follow Meta policies (24h customer care window, message tags).
+- Messaging must follow Meta policies (24h window + Utility templates).
+- Utility messaging may be geo-limited and requires App Review for `pages_utility_messaging`.
 - CastMe Pro never bypasses Meta restrictions.
-- Rate limits and eligibility are enforced by Meta; failed sends show in broadcast recipient status.
+- Rate limits and eligibility are enforced by Meta; failed sends show on the campaign.

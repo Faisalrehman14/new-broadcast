@@ -72,6 +72,7 @@ export async function facebookRoutes(app: FastifyInstance) {
           tokenExpiresAt: expiresAt,
           status: 'CONNECTED',
           lastApiSuccessAt: new Date(),
+          oauthFreshAt: new Date(),
         },
         update: {
           encryptedAccessToken: encryptSecret(token.accessToken),
@@ -79,6 +80,7 @@ export async function facebookRoutes(app: FastifyInstance) {
           status: 'CONNECTED',
           lastApiSuccessAt: new Date(),
           lastError: null,
+          oauthFreshAt: new Date(),
         },
       });
 

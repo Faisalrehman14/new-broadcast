@@ -20,7 +20,19 @@ async function upsertUser(email: string, name: string, password: string, role: '
   });
   await prisma.userSettings.upsert({
     where: { userId: user.id },
-    create: { userId: user.id },
+    create: { userId: user.id, broadcastSend: true },
+    update: {},
+  });
+  const resetAt = new Date();
+  resetAt.setMonth(resetAt.getMonth() + 1);
+  await prisma.userQuota.upsert({
+    where: { userId: user.id },
+    create: {
+      userId: user.id,
+      creditsRemaining: 5000,
+      creditsMonthly: 5000,
+      resetAt,
+    },
     update: {},
   });
   return user;

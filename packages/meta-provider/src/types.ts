@@ -22,7 +22,7 @@ export interface MetaContact {
   lastInteractionAt?: string;
 }
 
-export type MetaMessagingType = 'RESPONSE' | 'UPDATE' | 'MESSAGE_TAG';
+export type MetaMessagingType = 'RESPONSE' | 'UPDATE' | 'MESSAGE_TAG' | 'UTILITY';
 
 export type MetaMessageTag =
   | 'ACCOUNT_UPDATE'
@@ -37,13 +37,31 @@ export interface MetaSendTemplateInput {
   recipientPsid: string;
   templateName: string;
   languageCode?: string;
-  /** Rendered message text to send (preferred). */
   text?: string;
   bodyParameters: string[];
-  /** Contact's last inbound interaction — used to pick RESPONSE/UPDATE vs MESSAGE_TAG. */
   lastInteractionAt?: string | Date | null;
   messagingType?: MetaMessagingType;
   tag?: MetaMessageTag;
+  idempotencyKey: string;
+}
+
+export interface MetaSendUtilityInput {
+  pageId: string;
+  pageAccessToken: string;
+  recipientPsid: string;
+  templateName: string;
+  languageCode?: string;
+  bodyParameters: string[];
+  idempotencyKey: string;
+}
+
+export interface MetaSendResponseInput {
+  pageId: string;
+  pageAccessToken: string;
+  recipientPsid: string;
+  text?: string;
+  attachmentId?: string;
+  imageUrl?: string;
   idempotencyKey: string;
 }
 
@@ -64,6 +82,7 @@ export interface MetaTemplateStatus {
   externalTemplateId: string;
   status: MetaTemplateExternalStatus;
   rejectionReason?: string;
+  name?: string;
 }
 
 export interface MetaSubmitTemplateInput {
@@ -76,6 +95,14 @@ export interface MetaSubmitTemplateInput {
   exampleValues?: string[];
 }
 
+export interface MetaUtilityTemplateSummary {
+  id?: string;
+  name: string;
+  status: MetaTemplateExternalStatus;
+  language: string;
+  category?: string;
+}
+
 export interface MetaProvider {
   getOAuthUrl(state: string, redirectUri: string): string;
   exchangeCodeForToken(code: string, redirectUri: string): Promise<{
@@ -83,14 +110,15 @@ export interface MetaProvider {
     expiresIn?: number;
     tokenType?: string;
   }>;
+  exchangeLongLivedUserToken?(shortLivedToken: string): Promise<{
+    accessToken: string;
+    expiresIn?: number;
+  }>;
   getAuthorizedUser(userAccessToken: string): Promise<MetaAuthorizedUser>;
   getPages(userAccessToken: string): Promise<MetaPageSummary[]>;
   getPageInfo(pageId: string, pageAccessToken: string): Promise<MetaPageSummary>;
+  remintPageTokensFromUserToken?(userAccessToken: string): Promise<MetaPageSummary[]>;
   subscribeWebhooks(pageId: string, pageAccessToken: string): Promise<void>;
-  /**
-   * Conversations / messaging contacts. Meta APIs evolve; implementations
-   * must use currently supported endpoints and surface limitations clearly.
-   */
   fetchContacts(params: {
     pageId: string;
     pageAccessToken: string;
@@ -98,13 +126,26 @@ export interface MetaProvider {
     limit?: number;
   }): Promise<{ contacts: MetaContact[]; nextCursor?: string; hasMore: boolean }>;
   sendTemplateMessage(input: MetaSendTemplateInput): Promise<MetaSendResult>;
+  sendUtilityMessage(input: MetaSendUtilityInput): Promise<MetaSendResult>;
+  sendResponseMessage(input: MetaSendResponseInput): Promise<MetaSendResult>;
   submitTemplate(input: MetaSubmitTemplateInput): Promise<{ externalTemplateId: string }>;
+  createUtilityTemplate(input: MetaSubmitTemplateInput): Promise<{ externalTemplateId: string; status: MetaTemplateExternalStatus }>;
+  listMessageTemplates(params: {
+    pageId: string;
+    pageAccessToken: string;
+    name?: string;
+  }): Promise<MetaUtilityTemplateSummary[]>;
   getTemplateStatus(params: {
     pageId: string;
     pageAccessToken: string;
     externalTemplateId: string;
     templateName?: string;
   }): Promise<MetaTemplateStatus>;
+  uploadMessageAttachment?(params: {
+    pageId: string;
+    pageAccessToken: string;
+    imageUrl: string;
+  }): Promise<{ attachmentId: string }>;
   getMessageStatus?(params: {
     pageAccessToken: string;
     messageId: string;
@@ -117,3 +158,12 @@ export interface MetaProviderConfig {
   graphVersion: string;
   redirectUri: string;
 }
+
+export const META_OAUTH_SCOPES = [
+  'pages_show_list',
+  'pages_messaging',
+  'pages_manage_metadata',
+  'pages_read_engagement',
+  'pages_utility_messaging',
+  'business_management',
+] as const;

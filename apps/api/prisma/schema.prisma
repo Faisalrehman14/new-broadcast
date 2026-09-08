@@ -131,13 +131,17 @@ model User {
   facebookAccounts FacebookAccount[]
   pageConnections  PageConnection[]
   broadcasts       Broadcast[]
+  campaigns        BroadcastCampaign[]
   sessions         Session[]
   loginHistory     LoginHistory[]
   notifications    Notification[]
   auditLogs        AuditLog[]
   supportTickets   SupportTicket[]
   settings         UserSettings?
-  customTemplates  Template[]        @relation("UserTemplates")
+  quota            UserQuota?
+  customTemplates  Template[]          @relation("UserTemplates")
+  templateDrafts   BroadcastTemplateDraft[]
+  schedules        ScheduledBroadcast[]
 
   @@map("users")
 }
@@ -181,6 +185,7 @@ model FacebookAccount {
   status               FacebookAccountStatus @default(CONNECTED)
   lastApiSuccessAt     DateTime?             @map("last_api_success_at")
   lastError            String?               @map("last_error")
+  oauthFreshAt         DateTime?             @map("oauth_fresh_at")
   createdAt            DateTime              @default(now()) @map("created_at")
   updatedAt            DateTime              @updatedAt @map("updated_at")
 
@@ -204,13 +209,15 @@ model FacebookPage {
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @updatedAt @map("updated_at")
 
-  facebookAccount FacebookAccount  @relation(fields: [facebookAccountId], references: [id], onDelete: Cascade)
-  connections     PageConnection[]
-  contacts        Contact[]
-  syncJobs        SyncJob[]
-  webhookEvents   WebhookEvent[]
+  facebookAccount   FacebookAccount         @relation(fields: [facebookAccountId], references: [id], onDelete: Cascade)
+  connections       PageConnection[]
+  contacts          Contact[]
+  syncJobs          SyncJob[]
+  webhookEvents     WebhookEvent[]
   templateApprovals TemplateApproval[]
-  broadcasts      Broadcast[]
+  broadcasts        Broadcast[]
+  utilityTemplates  PageUtilityTemplate[]
+  campaignPages     BroadcastCampaignPage[]
 
   @@index([facebookAccountId])
   @@map("facebook_pages")
@@ -566,6 +573,7 @@ model UserSettings {
   messagesPerMinute     Int      @default(200) @map("messages_per_minute")
   concurrentSends       Int      @default(3) @map("concurrent_sends")
   maxRetries            Int      @default(5) @map("max_retries")
+  broadcastSend         Boolean  @default(true) @map("broadcast_send")
   notifyTemplateApproved Boolean @default(true) @map("notify_template_approved")
   notifyTemplateRejected Boolean @default(true) @map("notify_template_rejected")
   notifyBroadcastCompleted Boolean @default(true) @map("notify_broadcast_completed")
@@ -578,4 +586,190 @@ model UserSettings {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("user_settings")
+}
+
+enum CampaignPhase {
+  queued
+  setting_up_templates
+  syncing_leads
+  sending
+  completed
+  paused
+  stopped
+  failed
+}
+
+enum CampaignPageStatus {
+  ok
+  no_token
+  skipped
+  error
+}
+
+model BroadcastCampaign {
+  id                   String        @id @default(uuid())
+  userId               String        @map("user_id")
+  phase                CampaignPhase @default(queued)
+  message              String?
+  imageUrl             String?       @map("image_url")
+  attachmentId         String?       @map("attachment_id")
+  speedPreset          String        @default("safe") @map("speed_preset")
+  delayMs              Int           @default(500) @map("delay_ms")
+  deliveryMode         String        @default("freeform_plain") @map("delivery_mode")
+  utilityTemplate      Json?         @map("utility_template")
+  outside24hImageMode  Boolean       @default(false) @map("outside24h_image_mode")
+  estimatedRecipients  Int           @default(0) @map("estimated_recipients")
+  estimatedQuota       Int           @default(0) @map("estimated_quota")
+  sentCount            Int           @default(0) @map("sent_count")
+  failedCount          Int           @default(0) @map("failed_count")
+  skippedCount         Int           @default(0) @map("skipped_count")
+  queuedCount          Int           @default(0) @map("queued_count")
+  phaseMessage         String?       @map("phase_message")
+  startedAt            DateTime?     @map("started_at")
+  completedAt          DateTime?     @map("completed_at")
+  dismissedAt          DateTime?     @map("dismissed_at")
+  createdAt            DateTime      @default(now()) @map("created_at")
+  updatedAt            DateTime      @updatedAt @map("updated_at")
+
+  user       User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pages      BroadcastCampaignPage[]
+  recipients BroadcastCampaignRecipient[]
+  failures   BroadcastCampaignFailure[]
+
+  @@index([userId, phase])
+  @@index([userId, createdAt])
+  @@map("broadcast_campaigns")
+}
+
+model BroadcastCampaignPage {
+  id                   String             @id @default(uuid())
+  campaignId           String             @map("campaign_id")
+  pageId               String             @map("page_id")
+  platformPageId       String             @map("platform_page_id")
+  pageName             String             @map("page_name")
+  encryptedPageToken   String?            @map("encrypted_page_token")
+  status               CampaignPageStatus @default(ok)
+  templateReady        Boolean            @default(false) @map("template_ready")
+  utilityTemplateName  String?            @map("utility_template_name")
+  sentCount            Int                @default(0) @map("sent_count")
+  failedCount          Int                @default(0) @map("failed_count")
+  skippedCount         Int                @default(0) @map("skipped_count")
+  recipientCount       Int                @default(0) @map("recipient_count")
+  lastError            String?            @map("last_error")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  updatedAt            DateTime           @updatedAt @map("updated_at")
+
+  campaign   BroadcastCampaign            @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  page       FacebookPage                 @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  recipients BroadcastCampaignRecipient[]
+
+  @@unique([campaignId, pageId])
+  @@index([campaignId])
+  @@map("broadcast_campaign_pages")
+}
+
+model BroadcastCampaignRecipient {
+  id                String                  @id @default(uuid())
+  campaignId        String                  @map("campaign_id")
+  campaignPageId    String                  @map("campaign_page_id")
+  pageId            String                  @map("page_id")
+  psid              String
+  name              String?
+  lastInteractionAt DateTime?               @map("last_interaction_at")
+  status            RecipientDeliveryStatus @default(PENDING)
+  attemptCount      Int                     @default(0) @map("attempt_count")
+  idempotencyKey    String                  @unique @map("idempotency_key")
+  failureReason     String?                 @map("failure_reason")
+  externalMessageId String?                 @map("external_message_id")
+  sentAt            DateTime?               @map("sent_at")
+  failedAt          DateTime?               @map("failed_at")
+  createdAt         DateTime                @default(now()) @map("created_at")
+  updatedAt         DateTime                @updatedAt @map("updated_at")
+
+  campaign     BroadcastCampaign     @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  campaignPage BroadcastCampaignPage @relation(fields: [campaignPageId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId, status])
+  @@index([campaignPageId, status])
+  @@map("broadcast_campaign_recipients")
+}
+
+model BroadcastCampaignFailure {
+  id         String   @id @default(uuid())
+  campaignId String   @map("campaign_id")
+  pageId     String?  @map("page_id")
+  psid       String?
+  code       String
+  message    String
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  campaign BroadcastCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId, createdAt])
+  @@map("broadcast_campaign_failures")
+}
+
+model PageUtilityTemplate {
+  id         String                 @id @default(uuid())
+  pageId     String                 @map("page_id")
+  templateName String               @map("template_name")
+  language   String                 @default("en_US")
+  externalId String?                @map("external_id")
+  status     TemplateApprovalStatus @default(DRAFT)
+  body       String?
+  category   String                 @default("UTILITY")
+  createdAt  DateTime               @default(now()) @map("created_at")
+  updatedAt  DateTime               @updatedAt @map("updated_at")
+
+  page FacebookPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@unique([pageId, templateName, language])
+  @@index([pageId, status])
+  @@map("page_utility_templates")
+}
+
+model UserQuota {
+  id               String   @id @default(uuid())
+  userId           String   @unique @map("user_id")
+  creditsRemaining Int      @default(5000) @map("credits_remaining")
+  creditsMonthly   Int      @default(5000) @map("credits_monthly")
+  resetAt          DateTime @map("reset_at")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_quotas")
+}
+
+model BroadcastTemplateDraft {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  name      String
+  body      String
+  imageUrl  String?  @map("image_url")
+  meta      Json?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("broadcast_template_drafts")
+}
+
+model ScheduledBroadcast {
+  id          String    @id @default(uuid())
+  userId      String    @map("user_id")
+  payload     Json
+  scheduledAt DateTime  @map("scheduled_at")
+  status      String    @default("SCHEDULED")
+  campaignId  String?   @map("campaign_id")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, scheduledAt])
+  @@map("scheduled_broadcasts")
 }

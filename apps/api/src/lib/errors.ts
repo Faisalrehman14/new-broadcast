@@ -22,6 +22,7 @@ const FRIENDLY: Record<string, string> = {
   INVALID_TRANSITION: 'This action is not allowed for the current broadcast status.',
   RATE_LIMITED: 'Too many requests. Please wait a moment and try again.',
   CONFLICT: 'This action conflicts with the current state.',
+  QUOTA_EXCEEDED: 'Monthly message quota exceeded.',
 };
 
 export function toFriendlyMessage(code: string, fallback?: string): string {

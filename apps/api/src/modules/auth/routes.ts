@@ -11,6 +11,8 @@ import {
 import { prisma } from '../../lib/prisma.js';
 import { AppError } from '../../lib/errors.js';
 import { writeAuditLog } from '../../lib/audit.js';
+import { ensureCsrfCookie } from '../../lib/csrf.js';
+import { ensureUserQuota } from '../../lib/campaign.js';
 
 export async function authRoutes(app: FastifyInstance) {
   app.post('/api/auth/register', async (request, reply) => {
@@ -23,14 +25,16 @@ export async function authRoutes(app: FastifyInstance) {
         email: body.email.toLowerCase(),
         name: body.name,
         passwordHash: await hashPassword(body.password),
-        settings: { create: {} },
+        settings: { create: { broadcastSend: true } },
       },
     });
+    await ensureUserQuota(user.id);
 
     await createSession(user.id, reply, {
       ip: request.ip,
       userAgent: request.headers['user-agent'],
     });
+    const csrfToken = ensureCsrfCookie(reply);
     await writeAuditLog({
       actorId: user.id,
       action: 'user.registered',
@@ -41,6 +45,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     return {
       user: { id: user.id, email: user.email, name: user.name, role: user.role },
+      csrfToken,
     };
   });
 
@@ -76,6 +81,8 @@ export async function authRoutes(app: FastifyInstance) {
       ip: request.ip,
       userAgent: request.headers['user-agent'],
     });
+    await ensureUserQuota(user.id);
+    const csrfToken = ensureCsrfCookie(reply);
     await writeAuditLog({
       actorId: user.id,
       action: 'user.login',
@@ -86,6 +93,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     return {
       user: { id: user.id, email: user.email, name: user.name, role: user.role },
+      csrfToken,
     };
   });
 
@@ -104,15 +112,37 @@ export async function authRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  app.get('/api/auth/me', async (request) => {
+  app.get('/api/auth/me', async (request, reply) => {
     const user = await requireUser(request);
-    const connections = await prisma.pageConnection.findMany({
-      where: { userId: user.id },
-      include: { page: true },
-      orderBy: { createdAt: 'asc' },
-    });
+    const csrfToken = ensureCsrfCookie(reply, request.cookies.pb_csrf);
+    const [connections, account, settings, quota] = await Promise.all([
+      prisma.pageConnection.findMany({
+        where: { userId: user.id },
+        include: { page: true },
+        orderBy: { createdAt: 'asc' },
+      }),
+      prisma.facebookAccount.findFirst({
+        where: { userId: user.id },
+        orderBy: { updatedAt: 'desc' },
+      }),
+      prisma.userSettings.findUnique({ where: { userId: user.id } }),
+      ensureUserQuota(user.id),
+    ]);
+    const facebookConnected = Boolean(account && account.status === 'CONNECTED');
+    const hasLiveToken = Boolean(
+      facebookConnected && account?.encryptedAccessToken && account.status === 'CONNECTED'
+    );
     return {
       user: { id: user.id, email: user.email, name: user.name, role: user.role },
+      csrfToken,
+      facebookConnected,
+      hasLiveToken,
+      permissions: { 'broadcast.send': settings?.broadcastSend !== false },
+      quota: {
+        creditsRemaining: quota.creditsRemaining,
+        creditsMonthly: quota.creditsMonthly,
+        resetAt: quota.resetAt,
+      },
       pages: connections.map((c) => ({
         connectionId: c.id,
         pageId: c.pageId,
@@ -123,6 +153,7 @@ export async function authRoutes(app: FastifyInstance) {
         contactCount: c.contactCount,
         lastSyncedAt: c.lastSyncedAt,
         platformPageId: c.page.platformPageId,
+        hasPageToken: Boolean(c.page.encryptedPageToken),
       })),
     };
   });

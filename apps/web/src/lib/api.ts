@@ -25,12 +25,49 @@ export class ApiClientError extends Error {
   }
 }
 
+let csrfTokenMemory: string | null = null;
+
+export function setCsrfToken(token: string | null | undefined) {
+  csrfTokenMemory = token || null;
+  if (typeof window !== 'undefined' && token) {
+    try {
+      window.sessionStorage.setItem('pb_csrf', token);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+export function getCsrfToken(): string | null {
+  if (csrfTokenMemory) return csrfTokenMemory;
+  if (typeof window !== 'undefined') {
+    try {
+      return window.sessionStorage.getItem('pb_csrf');
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function readCookie(name: string): string | null {
+  if (typeof document === 'undefined') return null;
+  const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]!) : null;
+}
+
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const base = getApiBase();
   const headers = new Headers(options.headers || {});
+  const method = (options.method || 'GET').toUpperCase();
   const hasBody = options.body !== undefined && options.body !== null && options.body !== '';
   if (hasBody && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
+  }
+
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    const csrf = getCsrfToken() || readCookie('pb_csrf');
+    if (csrf) headers.set('X-CSRF-Token', csrf);
   }
 
   let res: Response;
@@ -55,6 +92,9 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   } catch {
     data = text;
   }
+
+  const maybeCsrf = (data as { csrfToken?: string } | null)?.csrfToken;
+  if (maybeCsrf) setCsrfToken(maybeCsrf);
 
   if (!res.ok) {
     const err = data as { error?: { message?: string; code?: string } } | null;

@@ -5,45 +5,46 @@ import type {
   MetaPageSummary,
   MetaProvider,
   MetaProviderConfig,
+  MetaSendResponseInput,
   MetaSendResult,
   MetaSendTemplateInput,
+  MetaSendUtilityInput,
   MetaSubmitTemplateInput,
   MetaTemplateStatus,
+  MetaUtilityTemplateSummary,
 } from './types.js';
 
 /**
  * Local-development ONLY mock provider.
  * Never used when META_PROVIDER=meta.
- * Simulates OAuth, pages, contacts, template approval, and sends.
  */
 export class MockMetaProvider implements MetaProvider {
   private readonly store = new Map<
     string,
-    { status: MetaTemplateStatus['status']; rejectionReason?: string; submittedAt: number }
+    { status: MetaTemplateStatus['status']; rejectionReason?: string; submittedAt: number; name: string }
   >();
 
   constructor(private readonly config: Partial<MetaProviderConfig> = {}) {}
 
   getOAuthUrl(state: string, redirectUri: string): string {
     const base = this.config.redirectUri?.replace('/api/facebook/callback', '') ?? 'http://localhost:4000';
-    // Mock OAuth lands on our callback with a fake code
     const params = new URLSearchParams({
       code: `mock_code_${randomUUID()}`,
       state,
     });
-    // In mock mode the API connect endpoint redirects through a local mock authorize page
     return `${base}/api/facebook/mock-authorize?${params}&redirect_uri=${encodeURIComponent(redirectUri)}`;
   }
 
-  async exchangeCodeForToken(code: string) {
-    if (!code.startsWith('mock_code_') && code !== 'mock_dev_code') {
-      // Still accept for local callback flows
-    }
+  async exchangeCodeForToken(_code: string) {
     return {
       accessToken: `mock_user_token_${randomUUID()}`,
       expiresIn: 60 * 60 * 24 * 60,
       tokenType: 'bearer',
     };
+  }
+
+  async exchangeLongLivedUserToken(shortLivedToken: string) {
+    return { accessToken: `ll_${shortLivedToken}`, expiresIn: 60 * 60 * 24 * 60 };
   }
 
   async getAuthorizedUser(_userAccessToken: string): Promise<MetaAuthorizedUser> {
@@ -81,6 +82,10 @@ export class MockMetaProvider implements MetaProvider {
         tasks: ['MANAGE', 'MESSAGING'],
       },
     ];
+  }
+
+  async remintPageTokensFromUserToken(userAccessToken: string) {
+    return this.getPages(userAccessToken);
   }
 
   async getPageInfo(pageId: string, pageAccessToken: string): Promise<MetaPageSummary> {
@@ -121,14 +126,25 @@ export class MockMetaProvider implements MetaProvider {
   }
 
   async sendTemplateMessage(input: MetaSendTemplateInput): Promise<MetaSendResult> {
-    // Simulate occasional transient failures for retry testing
-    if (input.recipientPsid.endsWith('_13')) {
+    return this.mockSend(input.recipientPsid, input.idempotencyKey);
+  }
+
+  async sendUtilityMessage(input: MetaSendUtilityInput): Promise<MetaSendResult> {
+    return this.mockSend(input.recipientPsid, input.idempotencyKey);
+  }
+
+  async sendResponseMessage(input: MetaSendResponseInput): Promise<MetaSendResult> {
+    return this.mockSend(input.recipientPsid, input.idempotencyKey);
+  }
+
+  private mockSend(recipientPsid: string, idempotencyKey: string): MetaSendResult {
+    if (recipientPsid.endsWith('_13')) {
       const err = new Error('Mock transient 429') as Error & { status: number; retryable: boolean };
       err.status = 429;
       err.retryable = true;
       throw err;
     }
-    if (input.recipientPsid.endsWith('_7')) {
+    if (recipientPsid.endsWith('_7')) {
       const err = new Error('Mock permanent send failure') as Error & {
         status: number;
         retryable: boolean;
@@ -138,25 +154,53 @@ export class MockMetaProvider implements MetaProvider {
       throw err;
     }
     return {
-      messageId: `m_mid.${createHmac('sha256', 'mock').update(input.idempotencyKey).digest('hex').slice(0, 24)}`,
-      recipientId: input.recipientPsid,
+      messageId: `m_mid.${createHmac('sha256', 'mock').update(idempotencyKey).digest('hex').slice(0, 24)}`,
+      recipientId: recipientPsid,
     };
   }
 
   async submitTemplate(input: MetaSubmitTemplateInput): Promise<{ externalTemplateId: string }> {
-    const id = `messenger_lib_${input.name}`;
-    this.store.set(id, { status: 'APPROVED', submittedAt: Date.now() });
-    return { externalTemplateId: id };
+    const created = await this.createUtilityTemplate(input);
+    return { externalTemplateId: created.externalTemplateId };
+  }
+
+  async createUtilityTemplate(
+    input: MetaSubmitTemplateInput
+  ): Promise<{ externalTemplateId: string; status: MetaTemplateStatus['status'] }> {
+    const id = `mock_utility_${input.name}`;
+    this.store.set(id, {
+      status: 'APPROVED',
+      submittedAt: Date.now(),
+      name: input.name,
+    });
+    return { externalTemplateId: id, status: 'APPROVED' };
+  }
+
+  async listMessageTemplates(params: {
+    pageId: string;
+    pageAccessToken: string;
+    name?: string;
+  }): Promise<MetaUtilityTemplateSummary[]> {
+    const out: MetaUtilityTemplateSummary[] = [];
+    for (const [id, cur] of this.store) {
+      if (params.name && cur.name !== params.name) continue;
+      out.push({
+        id,
+        name: cur.name,
+        status: cur.status,
+        language: 'en_US',
+        category: 'UTILITY',
+      });
+    }
+    return out;
   }
 
   async getTemplateStatus(params: {
     pageId: string;
     pageAccessToken: string;
     externalTemplateId: string;
+    templateName?: string;
   }): Promise<MetaTemplateStatus> {
-    if (params.externalTemplateId.startsWith('messenger_lib_')) {
-      return { externalTemplateId: params.externalTemplateId, status: 'APPROVED' };
-    }
     const cur = this.store.get(params.externalTemplateId);
     if (!cur) {
       return { externalTemplateId: params.externalTemplateId, status: 'APPROVED' };
@@ -165,6 +209,17 @@ export class MockMetaProvider implements MetaProvider {
       externalTemplateId: params.externalTemplateId,
       status: cur.status,
       rejectionReason: cur.rejectionReason,
+      name: cur.name,
+    };
+  }
+
+  async uploadMessageAttachment(params: {
+    pageId: string;
+    pageAccessToken: string;
+    imageUrl: string;
+  }): Promise<{ attachmentId: string }> {
+    return {
+      attachmentId: `mock_att_${createHmac('sha256', 'mock').update(params.imageUrl).digest('hex').slice(0, 16)}`,
     };
   }
 }

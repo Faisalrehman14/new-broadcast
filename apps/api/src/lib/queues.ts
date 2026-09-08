@@ -8,6 +8,8 @@ export const QUEUE_NAMES = {
   TEMPLATE_STATUS: 'template-status',
   BROADCAST: 'broadcast',
   MESSAGE_SEND: 'message-send',
+  CAMPAIGN_RUN: 'campaign-run',
+  CAMPAIGN_SEND: 'campaign-send',
   ANALYTICS: 'analytics',
   NOTIFICATIONS: 'notifications',
 } as const;

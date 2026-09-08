@@ -3,18 +3,22 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { api, ApiClientError } from '@/lib/api';
+import { api, ApiClientError, setCsrfToken } from '@/lib/api';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
 import { LoadingState } from './EmptyState';
 
 type Me = {
   user: { id: string; email: string; name: string; role: string };
+  csrfToken?: string;
+  facebookConnected?: boolean;
+  hasLiveToken?: boolean;
   pages: Array<{
     pageId: string;
     name: string;
     profileImage?: string | null;
     status: string;
+    hasPageToken?: boolean;
   }>;
 };
 
@@ -31,6 +35,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     api<Me>('/api/auth/me')
       .then((data) => {
+        if (data.csrfToken) setCsrfToken(data.csrfToken);
         setMe(data);
         setError(null);
         const stored = typeof window !== 'undefined' ? sessionStorage.getItem(PAGE_KEY) : null;

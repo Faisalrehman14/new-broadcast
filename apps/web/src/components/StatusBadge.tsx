@@ -15,6 +15,14 @@ const labels: Record<string, string> = {
   PARTIALLY_COMPLETED: 'Partially Completed',
   FAILED: 'Failed',
   CANCELLED: 'Cancelled',
+  SETTING_UP_TEMPLATES: 'Setting up templates',
+  SYNCING_LEADS: 'Syncing audience',
+  SENDING: 'Sending',
+  STOPPED: 'Stopped',
+  OK: 'OK',
+  NO_TOKEN: 'No token',
+  SKIPPED: 'Skipped',
+  ERROR: 'Error',
   CONNECTED: 'Connected',
   SYNCING: 'Syncing',
   ACTIVE: 'Active',
@@ -23,12 +31,10 @@ const labels: Record<string, string> = {
   IN_PROGRESS: 'In Progress',
   RESOLVED: 'Resolved',
   CLOSED: 'Closed',
-  SENDING: 'Sending',
   SENT: 'Sent',
   DELIVERED: 'Delivered',
   READ: 'Read',
   RETRYING: 'Retrying',
-  SKIPPED: 'Skipped',
 };
 
 export function StatusBadge({ status }: { status: string }) {

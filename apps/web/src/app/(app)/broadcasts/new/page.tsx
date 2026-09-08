@@ -4,308 +4,283 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { LoadingState } from '@/components/EmptyState';
-import { StatusBadge } from '@/components/StatusBadge';
-import { renderPreview } from '@/lib/utils';
-import { messages } from '@/i18n/en';
+import { STARTER_COPY } from './starters';
 
-type Template = {
-  id: string;
-  title: string;
-  metaName: string;
-  category: string;
-  body: string | null;
-  bodyStatus: string;
-  source: string;
-  isCustom: boolean;
+type PageRow = {
+  pageId: string;
+  name: string;
+  contactCount: number;
+  hasPageToken?: boolean;
   status: string;
-  variables: Array<{ key: string; position: number; label?: string }>;
-  approvals: Array<{ pageId: string; status: string }>;
 };
 
-export default function NewBroadcastPage() {
+type Starter = {
+  id: string;
+  name: string;
+  title: string;
+  body: string;
+  parameters: string[];
+};
+
+export default function NewCampaignPage() {
   const router = useRouter();
-  const [step, setStep] = useState(1);
-  const [name, setName] = useState('');
-  const [pages, setPages] = useState<Array<{ pageId: string; name: string }>>([]);
-  const [pageId, setPageId] = useState('');
-  const [templates, setTemplates] = useState<Template[]>([]);
-  const [templateId, setTemplateId] = useState('');
-  const [values, setValues] = useState<Record<string, string>>({});
-  const [customText, setCustomText] = useState('');
-  const [estimated, setEstimated] = useState<number | null>(null);
-  const [error, setError] = useState('');
-  const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [category, setCategory] = useState<'PAGEINTERACT' | 'LIBRARY' | 'CUSTOM'>('PAGEINTERACT');
+  const [pages, setPages] = useState<PageRow[]>([]);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [hasLiveToken, setHasLiveToken] = useState(true);
+  const [quota, setQuota] = useState<number | null>(null);
+  const [starters, setStarters] = useState<Starter[]>([]);
+  const [mode, setMode] = useState<'starter' | 'custom'>('custom');
+  const [starterName, setStarterName] = useState('');
+  const [message, setMessage] = useState('');
+  const [imageUrl, setImageUrl] = useState('');
+  const [speed, setSpeed] = useState<'safe' | 'fast' | 'turbo'>('safe');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [toast, setToast] = useState('');
 
   useEffect(() => {
     Promise.all([
-      api<{ pages: Array<{ pageId: string; name: string }> }>('/api/auth/me'),
-      api<{ templates: Template[] }>('/api/templates'),
+      api<{
+        pages: PageRow[];
+        hasLiveToken?: boolean;
+        quota?: { creditsRemaining: number };
+      }>('/api/auth/me'),
+      api<{ starters: Starter[] }>('/api/broadcast/templates'),
+      api<{ pages: Array<{ page_id: string; contact_count: number }> }>(
+        '/api/broadcast/audience/status'
+      ),
     ])
-      .then(([me, tpl]) => {
-        setPages(me.pages);
-        setPageId(me.pages[0]?.pageId || '');
-        setTemplates(tpl.templates);
+      .then(([me, tpl, audience]) => {
+        const counts = new Map(audience.pages.map((p) => [p.page_id, p.contact_count]));
+        const rows = me.pages.map((p) => ({
+          ...p,
+          contactCount: counts.get(p.pageId) ?? p.contactCount ?? 0,
+        }));
+        setPages(rows);
+        setSelected(rows.filter((p) => p.hasPageToken !== false).map((p) => p.pageId));
+        setHasLiveToken(me.hasLiveToken !== false);
+        setQuota(me.quota?.creditsRemaining ?? null);
+        setStarters(tpl.starters || STARTER_COPY);
+        if (tpl.starters?.[0]) setStarterName(tpl.starters[0].name);
       })
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => {
-    if (!pageId) return;
-    api<{ templates: Template[] }>(`/api/templates?pageId=${encodeURIComponent(pageId)}`)
-      .then((r) => setTemplates(r.templates))
-      .catch(() => undefined);
-  }, [pageId]);
+  const estimated = useMemo(
+    () => pages.filter((p) => selected.includes(p.pageId)).reduce((s, p) => s + (p.contactCount || 0), 0),
+    [pages, selected]
+  );
 
-  const template = templates.find((t) => t.id === templateId);
-  const filtered = templates.filter((t) => {
-    if (category === 'CUSTOM') return t.isCustom || t.source === 'CUSTOM';
-    if (category === 'LIBRARY') return t.source === 'LIBRARY';
-    return t.source === 'PAGEINTERACT';
-  });
+  const canSend =
+    hasLiveToken &&
+    selected.length > 0 &&
+    (mode === 'custom' ? Boolean(message.trim() || imageUrl.trim()) : Boolean(starterName));
 
-  const preview = useMemo(() => {
-    if (!template) return '';
-    if (template.isCustom) return customText || template.body || '';
-    return renderPreview(template.body || '', values);
-  }, [template, values, customText]);
-
-  useEffect(() => {
-    if (!pageId) return;
-    // Estimate via creating draft isn't needed — use contacts count for ALL_ELIGIBLE approx from me pages
-    api<{ data: unknown[]; pagination: { total: number } }>(`/api/contacts?pageId=${pageId}&pageSize=1`)
-      .then((r) => setEstimated(r.pagination.total))
-      .catch(() => setEstimated(null));
-  }, [pageId]);
-
-  async function create() {
-    if (!template) return;
-    setSaving(true);
+  async function syncSelected() {
+    setBusy(true);
     setError('');
     try {
-      const variableValues = template.isCustom
-        ? { text: customText }
-        : values;
-      const bodyForCustom =
-        template.isCustom && customText
-          ? await api<{ template: Template }>('/api/templates/' + template.id).then(async () => {
-              // update custom body
-              await api(`/api/templates/${template.id}`, {
-                method: 'PUT',
-                body: JSON.stringify({ body: customText }),
-              });
-            })
-          : null;
-      void bodyForCustom;
-
-      if (!template.isCustom && template.body) {
-        for (const v of template.variables) {
-          if (!values[v.key]?.trim()) {
-            throw new Error(`Variable {{${v.key}}} is required`);
-          }
-        }
+      for (const pageId of selected) {
+        await api('/api/broadcast/audience/sync', {
+          method: 'POST',
+          body: JSON.stringify({ page_id: pageId }),
+        });
       }
-
-      const res = await api<{ broadcast: { id: string } }>('/api/broadcasts', {
-        method: 'POST',
-        body: JSON.stringify({
-          name,
-          pageId,
-          templateId: template.id,
-          recipientMode: 'ALL_ELIGIBLE',
-          variableValues,
-        }),
-      });
-      router.push(`/broadcasts/${res.broadcast.id}`);
+      setToast('Audience sync started for selected pages.');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create broadcast');
+      setError(err instanceof Error ? err.message : 'Sync failed');
     } finally {
-      setSaving(false);
+      setBusy(false);
     }
   }
 
-  if (loading) return <LoadingState label="Loading broadcast wizard..." />;
+  async function prepareTemplates() {
+    setBusy(true);
+    setError('');
+    try {
+      for (const pageId of selected) {
+        await api('/api/broadcast/prepare-starter-pack', {
+          method: 'POST',
+          body: JSON.stringify({ page_id: pageId }),
+        });
+      }
+      setToast('UTILITY starter templates prepared on selected pages.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Prepare failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function send() {
+    if (!canSend) return;
+    setBusy(true);
+    setError('');
+    try {
+      const starter = starters.find((s) => s.name === starterName);
+      const res = await api<{
+        success: boolean;
+        campaignId: string;
+        estimatedRecipients: number;
+      }>('/api/broadcast/campaigns', {
+        method: 'POST',
+        body: JSON.stringify({
+          pages: selected.map((id) => {
+            const p = pages.find((x) => x.pageId === id);
+            return { id, name: p?.name };
+          }),
+          message: mode === 'custom' ? message : undefined,
+          image_url: imageUrl || undefined,
+          speed_preset: speed,
+          delivery_mode: mode === 'custom' ? 'freeform_plain' : 'named_utility',
+          utility_template:
+            mode === 'starter' && starter
+              ? {
+                  id: starter.id,
+                  name: starter.name,
+                  body: starter.body,
+                  language: 'en_US',
+                  parameters: starter.parameters,
+                }
+              : undefined,
+        }),
+      });
+      setToast(
+        `Campaign ${res.campaignId.slice(0, 8)}… queued · ~${res.estimatedRecipients} recipients`
+      );
+      router.push(`/broadcasts/${res.campaignId}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create campaign');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (loading) return <LoadingState label="Loading campaign builder..." />;
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">Create Broadcast</h1>
-        <p className="text-sm text-slate-500">Step {step} of 4</p>
+        <h1 className="text-2xl font-semibold">New campaign</h1>
+        <p className="text-sm text-slate-500">
+          Select Pages → sync audience → pick UTILITY template or custom text → Send
+        </p>
       </div>
 
-      {step === 1 ? (
-        <div className="card space-y-4 p-6">
-          <div>
-            <label className="label" htmlFor="bname">Broadcast name</label>
-            <input
-              id="bname"
-              className="input"
-              placeholder="September Customer Update"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="label" htmlFor="page">Page</label>
-            <select id="page" className="input" value={pageId} onChange={(e) => setPageId(e.target.value)}>
-              {pages.map((p) => (
-                <option key={p.pageId} value={p.pageId}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <p className="text-sm text-slate-600">
-            Recipients: All eligible contacts
-            {estimated !== null ? (
-              <span className="ml-2 font-semibold text-dark">
-                {estimated.toLocaleString()} eligible recipients
+      {!hasLiveToken ? (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          Session expired / Reconnect required — Facebook is connected but no live token. Reconnect
+          before sending.
+        </div>
+      ) : null}
+
+      <section className="card space-y-4 p-6">
+        <h2 className="font-semibold">1. Pages</h2>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {pages.map((p) => (
+            <label key={p.pageId} className="flex items-start gap-3 rounded-lg border border-slate-200 p-3">
+              <input
+                type="checkbox"
+                checked={selected.includes(p.pageId)}
+                onChange={(e) => {
+                  setSelected((prev) =>
+                    e.target.checked ? [...prev, p.pageId] : prev.filter((id) => id !== p.pageId)
+                  );
+                }}
+              />
+              <span>
+                <span className="font-medium">{p.name}</span>
+                <span className="mt-0.5 block text-xs text-slate-500">
+                  {p.contactCount} contacts · {p.hasPageToken === false ? 'no token' : 'token ok'}
+                </span>
               </span>
-            ) : null}
-          </p>
-          <button className="btn-primary" disabled={!name || !pageId} onClick={() => setStep(2)}>
-            Continue
+            </label>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className="btn-secondary" disabled={busy || !selected.length} onClick={syncSelected}>
+            Sync audience
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={busy || !selected.length}
+            onClick={prepareTemplates}
+          >
+            Prepare UTILITY starters
           </button>
         </div>
-      ) : null}
+      </section>
 
-      {step === 2 ? (
-        <div className="space-y-4">
-          <div className="flex gap-2">
-            {(['PAGEINTERACT', 'LIBRARY', 'CUSTOM'] as const).map((c) => (
-              <button
-                key={c}
-                type="button"
-                className={category === c ? 'btn-primary' : 'btn-secondary'}
-                onClick={() => setCategory(c)}
-              >
-                {c === 'PAGEINTERACT' ? 'Core PageInteract' : c === 'LIBRARY' ? 'Library Extras' : 'Custom'}
-              </button>
+      <section className="card space-y-4 p-6">
+        <h2 className="font-semibold">2. Message</h2>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            className={mode === 'custom' ? 'btn-primary' : 'btn-secondary'}
+            onClick={() => setMode('custom')}
+          >
+            Custom / freeform
+          </button>
+          <button
+            type="button"
+            className={mode === 'starter' ? 'btn-primary' : 'btn-secondary'}
+            onClick={() => setMode('starter')}
+          >
+            UTILITY starter
+          </button>
+        </div>
+        {mode === 'custom' ? (
+          <>
+            <textarea
+              className="input min-h-[140px]"
+              placeholder="Message text (outside 24h wraps as plain UTILITY {{1}})"
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+            />
+            <input
+              className="input"
+              placeholder="Optional image URL"
+              value={imageUrl}
+              onChange={(e) => setImageUrl(e.target.value)}
+            />
+          </>
+        ) : (
+          <select className="input" value={starterName} onChange={(e) => setStarterName(e.target.value)}>
+            {starters.map((s) => (
+              <option key={s.name} value={s.name}>
+                {s.title} ({s.name})
+              </option>
             ))}
-          </div>
-          <div className="grid gap-4 md:grid-cols-2">
-            {filtered.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                className={`card p-4 text-left ${templateId === t.id ? 'ring-2 ring-primary' : ''}`}
-                onClick={() => {
-                  setTemplateId(t.id);
-                  setValues({});
-                }}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <p className="font-semibold">{t.title}</p>
-                    <p className="text-xs text-slate-400">{t.metaName}</p>
-                  </div>
-                  <StatusBadge
-                    status={
-                      t.approvals.find((a) => a.pageId === pageId)?.status ||
-                      (t.isCustom ? 'DRAFT' : t.status)
-                    }
-                  />
-                </div>
-                <p className="mt-2 text-xs text-slate-500">{t.category}</p>
-                {t.bodyStatus === 'requires_import' ? (
-                  <p className="mt-2 text-xs text-amber-700">Body requires import</p>
-                ) : (
-                  <pre className="mt-3 max-h-24 overflow-hidden whitespace-pre-wrap text-xs text-slate-600">
-                    {(t.body || '').slice(0, 180)}
-                  </pre>
-                )}
-              </button>
-            ))}
-          </div>
-          <div className="flex gap-2">
-            <button className="btn-secondary" onClick={() => setStep(1)}>Back</button>
+          </select>
+        )}
+      </section>
+
+      <section className="card space-y-4 p-6">
+        <h2 className="font-semibold">3. Speed</h2>
+        <div className="flex flex-wrap gap-2">
+          {(['safe', 'fast', 'turbo'] as const).map((s) => (
             <button
-              className="btn-primary"
-              disabled={
-                !templateId ||
-                templates.find((t) => t.id === templateId)?.bodyStatus === 'requires_import'
-              }
-              onClick={() => setStep(3)}
+              key={s}
+              type="button"
+              className={speed === s ? 'btn-primary' : 'btn-secondary'}
+              onClick={() => setSpeed(s)}
             >
-              Continue
+              {s}
             </button>
-          </div>
+          ))}
         </div>
-      ) : null}
-
-      {step === 3 && template ? (
-        <div className="grid gap-6 lg:grid-cols-2">
-          <div className="card space-y-4 p-6">
-            <h2 className="font-semibold">Template variables</h2>
-            {template.isCustom ? (
-              <>
-                <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
-                  {messages.approval.customWarning}
-                </p>
-                <textarea
-                  className="input min-h-[180px]"
-                  value={customText}
-                  onChange={(e) => setCustomText(e.target.value)}
-                  placeholder="Enter freeform message..."
-                />
-              </>
-            ) : (
-              template.variables.map((v) => (
-                <div key={v.key}>
-                  <label className="label" htmlFor={`var-${v.key}`}>
-                    {`{{${v.key}}}`} {v.label || ''}
-                  </label>
-                  <input
-                    id={`var-${v.key}`}
-                    className="input"
-                    value={values[v.key] || ''}
-                    onChange={(e) => setValues((s) => ({ ...s, [v.key]: e.target.value }))}
-                  />
-                </div>
-              ))
-            )}
-            <div className="flex gap-2">
-              <button className="btn-secondary" onClick={() => setStep(2)}>Back</button>
-              <button className="btn-primary" onClick={() => setStep(4)}>Preview</button>
-            </div>
-          </div>
-          <div className="card p-6">
-            <h2 className="font-semibold">Live preview</h2>
-            <pre className="mt-4 whitespace-pre-wrap rounded-xl bg-slate-50 p-4 text-sm leading-relaxed">
-              {preview || 'Preview will appear here'}
-            </pre>
-          </div>
-        </div>
-      ) : null}
-
-      {step === 4 ? (
-        <div className="card space-y-4 p-6">
-          <h2 className="font-semibold">Validate & create</h2>
-          <dl className="grid gap-2 text-sm sm:grid-cols-2">
-            <div>
-              <dt className="text-slate-400">Broadcast</dt>
-              <dd className="font-medium">{name}</dd>
-            </div>
-            <div>
-              <dt className="text-slate-400">Template</dt>
-              <dd className="font-medium">{template?.title}</dd>
-            </div>
-            <div>
-              <dt className="text-slate-400">Recipients</dt>
-              <dd className="font-medium">{estimated?.toLocaleString() ?? '—'}</dd>
-            </div>
-          </dl>
-          <pre className="whitespace-pre-wrap rounded-xl bg-slate-50 p-4 text-sm">{preview}</pre>
-          {error ? <p className="text-sm text-danger">{error}</p> : null}
-          <div className="flex gap-2">
-            <button className="btn-secondary" onClick={() => setStep(3)}>Back</button>
-            <button className="btn-primary" disabled={saving} onClick={create}>
-              {saving ? 'Creating...' : 'Create broadcast'}
-            </button>
-          </div>
-        </div>
-      ) : null}
+        <p className="text-sm text-slate-600">
+          ~{estimated.toLocaleString()} recipients
+          {quota !== null ? ` · ${quota.toLocaleString()} credits left` : ''}
+        </p>
+        {error ? <p className="text-sm text-danger">{error}</p> : null}
+        {toast ? <p className="text-sm text-emerald-700">{toast}</p> : null}
+        <button className="btn-primary" disabled={!canSend || busy} onClick={send}>
+          {busy ? 'Starting…' : 'Send campaign'}
+        </button>
+      </section>
     </div>
   );
 }

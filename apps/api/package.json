@@ -12,7 +12,7 @@
     "prisma:migrate": "prisma migrate deploy",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:seed": "tsx prisma/seed.ts",
-    "test": "node --import tsx --test src/lib/state-crypto.test.ts",
+    "test": "node --import tsx --test src/lib/state-crypto.test.ts src/lib/campaign.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
