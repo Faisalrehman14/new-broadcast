@@ -108,7 +108,8 @@ export default function NewCampaignPage() {
 
   const badges = useMemo(() => {
     const set = new Set(starters.map((s) => s.badge));
-    return ['All', 'Custom', ...Array.from(set)];
+    const rest = Array.from(set).filter((b) => b !== 'Instant');
+    return ['All', 'Instant', 'Custom', ...rest.filter((b) => b !== 'Custom')];
   }, [starters]);
 
   const libraryItems = useMemo(() => {
@@ -246,12 +247,20 @@ export default function NewCampaignPage() {
     setError('');
     try {
       for (const pageId of selected) {
-        await api('/api/broadcast/prepare-starter-pack', {
+        await api('/api/broadcast/prepare-outside24h', {
           method: 'POST',
-          body: JSON.stringify({ page_id: pageId }),
+          body: JSON.stringify({
+            page_id: pageId,
+            template_name: 'castme_plain_utility_v1',
+            body: '{{1}}',
+            language: 'en_US',
+            example_values: ['Hello from CastMe Pro'],
+          }),
         });
       }
-      setToast('UTILITY starter templates prepared on selected pages.');
+      setToast(
+        'Instant plain UTILITY prepared on selected Pages (shared template — no per-copy Meta wait).'
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Prepare failed');
     } finally {
@@ -285,6 +294,8 @@ export default function NewCampaignPage() {
     setError('');
     try {
       const rendered = previewText.trim();
+      const useInstant =
+        mode === 'custom' || Boolean(applied?.instant) || applied?.id === 'custom';
       const res = await api<{
         success: boolean;
         campaignId: string;
@@ -299,15 +310,21 @@ export default function NewCampaignPage() {
           message: rendered || undefined,
           image_url: imageUrl || undefined,
           speed_preset: speed,
-          delivery_mode: mode === 'custom' ? 'freeform_plain' : 'named_utility',
-          utility_template:
-            mode === 'starter' && applied
+          delivery_mode: useInstant ? 'freeform_plain' : 'named_utility',
+          utility_template: useInstant
+            ? {
+                name: 'castme_plain_utility_v1',
+                body: '{{1}}',
+                language: 'en_US',
+                parameters: ['message'],
+              }
+            : mode === 'starter' && applied
               ? {
                   id: applied.id,
                   name: applied.name,
                   body: applied.body,
                   language: 'en_US',
-                  parameters: slots,
+                  parameters: slots.length ? slots : applied.examples,
                 }
               : undefined,
         }),
@@ -429,7 +446,7 @@ export default function NewCampaignPage() {
               disabled={busy || !selected.length}
               onClick={prepareTemplates}
             >
-              Prepare UTILITY starters
+              Prepare Instant UTILITY
             </button>
           </div>
 

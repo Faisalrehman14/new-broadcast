@@ -798,42 +798,77 @@ async function handleCampaignRun(job: Job) {
     try {
       // Remint once per page before template work (avoids stale snapshot on multi-page).
       const token = await resolveCampaignPageToken(cp);
+      let activeTemplateName = templateName;
+      let activeTemplateBody =
+        templateName === PLAIN_UTILITY_TEMPLATE_NAME ? PLAIN_UTILITY_BODY : templateBody;
+
       // Prefer listing an existing approved template before creating.
-      const listed = await meta.listMessageTemplates({
+      let listed = await meta.listMessageTemplates({
         pageId: cp.platformPageId,
         pageAccessToken: token,
-        name: templateName,
+        name: activeTemplateName,
       });
-      const existing =
-        listed.find((t) => t.name === templateName && t.status === 'APPROVED') ||
-        listed.find((t) => t.name === templateName) ||
-        listed.find((t) => t.name.toLowerCase() === templateName.toLowerCase());
+      let existing =
+        listed.find((t) => t.name === activeTemplateName && t.status === 'APPROVED') ||
+        listed.find((t) => t.name === activeTemplateName) ||
+        listed.find((t) => t.name.toLowerCase() === activeTemplateName.toLowerCase());
+
+      // Named starter still pending? Fall back to shared Instant plain if already APPROVED.
+      if (
+        (!existing || existing.status !== 'APPROVED') &&
+        activeTemplateName !== PLAIN_UTILITY_TEMPLATE_NAME &&
+        campaign.message
+      ) {
+        const plainListed = await meta.listMessageTemplates({
+          pageId: cp.platformPageId,
+          pageAccessToken: token,
+          name: PLAIN_UTILITY_TEMPLATE_NAME,
+        });
+        const plainOk = plainListed.find(
+          (t) => t.name === PLAIN_UTILITY_TEMPLATE_NAME && t.status === 'APPROVED'
+        );
+        if (plainOk) {
+          activeTemplateName = PLAIN_UTILITY_TEMPLATE_NAME;
+          activeTemplateBody = PLAIN_UTILITY_BODY;
+          listed = plainListed;
+          existing = plainOk;
+          logger.info(
+            { pageId: cp.pageId, campaignId },
+            'using Instant plain UTILITY fallback (named template not APPROVED yet)'
+          );
+        }
+      }
 
       // Prefer Meta's stored language (often `en`) over campaign default `en_US`.
-      const resolvedLanguage = existing?.language || language;
+      let resolvedLanguage = existing?.language || language;
+      if (!existing && resolvedLanguage === 'en_US') resolvedLanguage = 'en';
 
       let created: { externalTemplateId: string; status: string };
       if (existing) {
         // Never treat UNKNOWN as APPROVED — that caused multi-page UTILITY flops.
         created = {
-          externalTemplateId: existing.id || `utility_${templateName}`,
+          externalTemplateId: existing.id || `utility_${activeTemplateName}`,
           status: existing.status === 'UNKNOWN' ? 'PENDING' : existing.status,
         };
       } else {
         created = await meta.createUtilityTemplate({
           pageId: cp.platformPageId,
           pageAccessToken: token,
-          name: templateName,
+          name: activeTemplateName,
           category: 'UTILITY',
           language: resolvedLanguage,
-          body: templateBody,
-          exampleValues: utility.parameters?.length
-            ? utility.parameters
-            : [campaign.message || 'Example update'],
+          body: activeTemplateBody,
+          exampleValues:
+            activeTemplateName === PLAIN_UTILITY_TEMPLATE_NAME
+              ? [campaign.message || 'Example update']
+              : utility.parameters?.length
+                ? utility.parameters
+                : [campaign.message || 'Example update'],
         });
       }
 
       // Wait until Meta reports a real APPROVED/REJECTED (incl. UNKNOWN/PENDING).
+      // Instant plain is usually fast; named starters may need the full poll.
       if (created.status !== 'APPROVED' && created.status !== 'REJECTED') {
         await prisma.broadcastCampaign.update({
           where: { id: campaignId },
@@ -844,8 +879,8 @@ async function handleCampaignRun(job: Job) {
         const waited = await meta.waitForUtilityTemplateApproved({
           pageId: cp.platformPageId,
           pageAccessToken: token,
-          templateName,
-          retries: 40,
+          templateName: activeTemplateName,
+          retries: activeTemplateName === PLAIN_UTILITY_TEMPLATE_NAME ? 20 : 40,
           intervalMs: 3000,
         });
         created = {
@@ -858,23 +893,23 @@ async function handleCampaignRun(job: Job) {
         where: {
           pageId_templateName_language: {
             pageId: cp.pageId,
-            templateName,
+            templateName: activeTemplateName,
             language: resolvedLanguage,
           },
         },
         create: {
           pageId: cp.pageId,
-          templateName,
+          templateName: activeTemplateName,
           language: resolvedLanguage,
           externalId: created.externalTemplateId,
           status: created.status === 'APPROVED' ? 'APPROVED' : created.status === 'REJECTED' ? 'REJECTED' : 'PENDING',
-          body: templateBody,
+          body: activeTemplateBody,
           category: 'UTILITY',
         },
         update: {
           externalId: created.externalTemplateId,
           status: created.status === 'APPROVED' ? 'APPROVED' : created.status === 'REJECTED' ? 'REJECTED' : 'PENDING',
-          body: templateBody,
+          body: activeTemplateBody,
         },
       });
       const readyApproved = created.status === 'APPROVED';
@@ -926,7 +961,7 @@ async function handleCampaignRun(job: Job) {
         where: { id: cp.id },
         data: {
           templateReady: ready,
-          utilityTemplateName: templateName,
+          utilityTemplateName: activeTemplateName,
           status: 'ok',
           lastError: ready
             ? null

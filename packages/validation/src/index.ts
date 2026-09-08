@@ -177,5 +177,6 @@ export const analyticsQuerySchema = z.object({
 export {
   STARTER_UTILITY_TEMPLATES,
   STARTER_UTILITY_TEMPLATE_COUNT,
+  INSTANT_PLAIN_UTILITY_NAME,
   type StarterUtilityTemplate,
 } from './starter-catalog.js';

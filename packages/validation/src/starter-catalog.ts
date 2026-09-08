@@ -1,4 +1,7 @@
-/** Full PageInteract / reference Messenger starter library (28 UTILITY templates). */
+/** Shared Meta UTILITY name for Instant templates — one APPROVED body {{1}} per Page, no per-copy review. */
+export const INSTANT_PLAIN_UTILITY_NAME = 'castme_plain_utility_v1';
+
+/** Full PageInteract / reference Messenger starter library (+ Instant plain presets). */
 export type StarterUtilityTemplate = {
   id: string;
   name: string;
@@ -9,9 +12,108 @@ export type StarterUtilityTemplate = {
   parameters: string[];
   labels: string[];
   examples: string[];
+  /** When true, send via castme_plain_utility_v1 (no new Meta template / no wait). */
+  instant?: boolean;
 };
 
 export const STARTER_UTILITY_TEMPLATES: readonly StarterUtilityTemplate[] = [
+  // —— Instant: all share castme_plain_utility_v1 ({{1}} = full rendered message) ——
+  {
+    id: "instant_bonus_active",
+    name: INSTANT_PLAIN_UTILITY_NAME,
+    title: "Bonus Now Active",
+    badge: "Instant",
+    description: "Pre-shared plain UTILITY — no Meta wait once plain is ready on the Page",
+    body: "Hello {{1}} ❤️❤️, {{2}} is now ACTIVE. ☘️",
+    parameters: ["customer_name", "what_is_active"],
+    labels: ["Customer name", "What is active"],
+    examples: ["Friend", "30% Bonus"],
+    instant: true,
+  },
+  {
+    id: "instant_vip_unlock",
+    name: INSTANT_PLAIN_UTILITY_NAME,
+    title: "VIP Unlocked",
+    badge: "Instant",
+    description: "Instant plain UTILITY — works on every Page after one plain approval",
+    body: "Hey {{1}} 🔥, your {{2}} is unlocked. Reply YES for help. ✅",
+    parameters: ["customer_name", "vip_perk"],
+    labels: ["Customer name", "VIP / perk"],
+    examples: ["Friend", "VIP access"],
+    instant: true,
+  },
+  {
+    id: "instant_wallet_update",
+    name: INSTANT_PLAIN_UTILITY_NAME,
+    title: "Wallet Updated",
+    badge: "Instant",
+    description: "Instant account update via shared plain template",
+    body: "Hi {{1}} 👀, your {{2}} was updated. {{3}} 💸",
+    parameters: ["customer_name", "what_updated", "detail"],
+    labels: ["Customer name", "What updated", "Detail"],
+    examples: ["Friend", "wallet", "Balance is ready to use."],
+    instant: true,
+  },
+  {
+    id: "instant_offer_cta",
+    name: INSTANT_PLAIN_UTILITY_NAME,
+    title: "Offer + Reply CTA",
+    badge: "Instant",
+    description: "Short offer with reply CTA — Instant plain send",
+    body: "Hello {{1}} 🎁, {{2}} is ready for you. Reply YES if you want {{3}}.",
+    parameters: ["customer_name", "offer_name", "cta"],
+    labels: ["Customer name", "Offer", "CTA"],
+    examples: ["Friend", "today's bonus", "free spins"],
+    instant: true,
+  },
+  {
+    id: "instant_status_ok",
+    name: INSTANT_PLAIN_UTILITY_NAME,
+    title: "Status Confirmed",
+    badge: "Instant",
+    description: "One-line confirmation — Instant plain UTILITY",
+    body: "Hi {{1}} ✅, your {{2}} is confirmed. Reply if you need help.",
+    parameters: ["customer_name", "what_confirmed"],
+    labels: ["Customer name", "What confirmed"],
+    examples: ["Friend", "account status"],
+    instant: true,
+  },
+  {
+    id: "instant_reward_ready",
+    name: INSTANT_PLAIN_UTILITY_NAME,
+    title: "Reward Ready",
+    badge: "Instant",
+    description: "Reward notice via shared plain template",
+    body: "{{1}}, your {{2}} is ready 🎉. {{3}}",
+    parameters: ["customer_name", "reward", "extra"],
+    labels: ["Customer name", "Reward", "Extra note"],
+    examples: ["Friend", "daily reward", "Claim it in the app."],
+    instant: true,
+  },
+  {
+    id: "instant_support_done",
+    name: INSTANT_PLAIN_UTILITY_NAME,
+    title: "Issue Resolved",
+    badge: "Instant",
+    description: "Support resolved — Instant plain send",
+    body: "Hi {{1}}, your {{2}} is resolved ✅. {{3}}",
+    parameters: ["customer_name", "issue", "note"],
+    labels: ["Customer name", "Issue", "Note"],
+    examples: ["Friend", "request", "Thanks for your patience."],
+    instant: true,
+  },
+  {
+    id: "instant_reminder",
+    name: INSTANT_PLAIN_UTILITY_NAME,
+    title: "Friendly Reminder",
+    badge: "Instant",
+    description: "Soft reminder — Instant plain UTILITY",
+    body: "Hello {{1}} 🔔, reminder: {{2}}. Reply if you need assistance.",
+    parameters: ["customer_name", "reminder"],
+    labels: ["Customer name", "Reminder"],
+    examples: ["Friend", "your bonus expires soon"],
+    instant: true,
+  },
   {
     id: "lib_28",
     name: "pi_lib_28",

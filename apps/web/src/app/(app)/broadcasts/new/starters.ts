@@ -12,12 +12,13 @@ export const CUSTOM_STARTER: StarterTemplate = {
   id: 'custom',
   name: 'custom_freeform',
   title: 'Custom message',
-  badge: 'Simple',
-  description: 'Write anything — sent as plain UTILITY outside the 24h window',
+  badge: 'Instant',
+  description: 'Write anything — uses shared plain UTILITY (no new Meta template wait)',
   body: '{{1}}',
   parameters: ['message'],
   labels: ['Your message'],
   examples: ['Hello! Here is a quick update for you.'],
+  instant: true,
 };
 
 export function fillTemplateBody(body: string, values: string[]): string {
@@ -36,7 +37,7 @@ export function mergeStarters(
 ): StarterTemplate[] {
   const byName = new Map(STARTER_COPY.map((s) => [s.name, s]));
   const merged = apiStarters.map((s) => {
-    const local = byName.get(s.name);
+    const local = byName.get(s.name) || STARTER_COPY.find((x) => x.id === s.id);
     return {
       id: s.id,
       name: s.name,
@@ -47,15 +48,16 @@ export function mergeStarters(
       parameters: s.parameters || local?.parameters || [],
       labels: s.labels || local?.labels || (s.parameters || []).map((_, i) => `Field ${i + 1}`),
       examples: s.examples || local?.examples || [],
+      instant: Boolean(s.instant ?? local?.instant),
     } satisfies StarterTemplate;
   });
   // Prefer full local/reference catalog when API response is thinner/older
-  if (merged.length < STARTER_COPY.length) {
-    const names = new Set(merged.map((m) => m.name));
-    for (const s of STARTER_COPY) {
-      if (!names.has(s.name)) merged.push(s);
-    }
+  const ids = new Set(merged.map((m) => m.id));
+  for (const s of STARTER_COPY) {
+    if (!ids.has(s.id)) merged.push(s);
   }
+  // Instant presets first in the library
+  merged.sort((a, b) => Number(Boolean(b.instant)) - Number(Boolean(a.instant)));
   return merged;
 }
 
