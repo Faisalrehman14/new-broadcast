@@ -6,6 +6,7 @@
     "dockerBuildTarget": "worker"
   },
   "deploy": {
+    "startCommand": "npx prisma generate --schema apps/api/prisma/schema.prisma && node apps/worker/dist/index.js",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
   }

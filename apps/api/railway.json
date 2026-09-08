@@ -6,7 +6,7 @@
     "dockerBuildTarget": "api"
   },
   "deploy": {
-    "startCommand": "npm run start:prod -w @pagebroadcast/api",
+    "startCommand": "npx prisma generate --schema apps/api/prisma/schema.prisma && npx prisma migrate deploy --schema apps/api/prisma/schema.prisma && node apps/api/dist/server.js",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
   }
