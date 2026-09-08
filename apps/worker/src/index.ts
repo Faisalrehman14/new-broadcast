@@ -11,6 +11,7 @@ import { Worker, Queue, type Job } from 'bullmq';
 import { PrismaClient } from '@prisma/client';
 import { personalizeBroadcastMessage } from './lib/personalize.js';
 import { acquirePageSendSlot } from './lib/send-gate.js';
+import { classifyMetaSendError } from './lib/meta-send-errors.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
@@ -777,7 +778,7 @@ async function handleCampaignRun(job: Job) {
               update: {
                 name: c.name ?? undefined,
                 lastInteractionAt: c.lastInteractionAt ? new Date(c.lastInteractionAt) : undefined,
-                status: 'ACTIVE',
+                // Do not force ACTIVE — blocked/invalid PSIDs stay suppressed until webhook re-engages.
               },
             });
           }
@@ -1036,22 +1037,64 @@ async function handleCampaignSend(job: Job) {
       }),
     ]);
   } catch (err) {
-    const e = err as Error & { status?: number; retryable?: boolean };
-    const retryable = e.retryable || e.status === 429 || (e.status !== undefined && e.status >= 500);
-    if (retryable) {
+    const classified = classifyMetaSendError(err);
+
+    if (classified.retryable) {
       await prisma.broadcastCampaignRecipient.update({
         where: { id: recipientId },
-        data: { status: 'RETRYING', failureReason: e.message },
+        data: { status: 'RETRYING', failureReason: classified.reason },
       });
       throw err;
     }
+
+    // Permanent recipient issues — skip (not "failed send"), stop retrying, prune audience.
+    if (
+      classified.kind === 'recipient_unavailable' ||
+      classified.kind === 'recipient_invalid'
+    ) {
+      if (classified.deactivateContact) {
+        await prisma.contact.updateMany({
+          where: { pageId: cp.pageId, platformUserId: recipient.psid },
+          data: {
+            status: classified.kind === 'recipient_unavailable' ? 'BLOCKED' : 'INACTIVE',
+          },
+        });
+      }
+      await prisma.$transaction([
+        prisma.broadcastCampaignRecipient.update({
+          where: { id: recipientId },
+          data: {
+            status: 'SKIPPED',
+            failedAt: new Date(),
+            failureReason: classified.reason,
+          },
+        }),
+        prisma.broadcastCampaign.update({
+          where: { id: campaignId },
+          data: { skippedCount: { increment: 1 }, queuedCount: { decrement: 1 } },
+        }),
+      ]);
+      // Sample only — avoid flooding failure list with expected unreachable PSIDs.
+      if (Math.random() < 0.05) {
+        await recordCampaignFailure(
+          campaignId,
+          classified.reason,
+          classified.message,
+          cp.pageId,
+          recipient.psid
+        );
+      }
+      await maybeFinalizeCampaign(campaignId);
+      return;
+    }
+
     await prisma.$transaction([
       prisma.broadcastCampaignRecipient.update({
         where: { id: recipientId },
         data: {
           status: 'FAILED',
           failedAt: new Date(),
-          failureReason: e.message,
+          failureReason: classified.reason,
         },
       }),
       prisma.broadcastCampaignPage.update({
@@ -1063,7 +1106,13 @@ async function handleCampaignSend(job: Job) {
         data: { failedCount: { increment: 1 }, queuedCount: { decrement: 1 } },
       }),
     ]);
-    await recordCampaignFailure(campaignId, 'send_failed', e.message, cp.pageId, recipient.psid);
+    await recordCampaignFailure(
+      campaignId,
+      classified.reason,
+      classified.message,
+      cp.pageId,
+      recipient.psid
+    );
   }
 
   await maybeFinalizeCampaign(campaignId);
@@ -1123,7 +1172,12 @@ async function maybeFinalizeCampaign(campaignId: string) {
   if (pending > 0) return;
 
   let phase: 'completed' | 'failed' = 'completed';
+  // Skipped unreachable PSIDs are expected Meta noise — only fail when real send errors dominate.
   if (c.sentCount === 0 && c.failedCount > 0) phase = 'failed';
+  const skipNote =
+    c.skippedCount > 0
+      ? ` ${c.skippedCount} skipped (unavailable/invalid recipients).`
+      : '';
   await prisma.broadcastCampaign.update({
     where: { id: campaignId },
     data: {
@@ -1131,8 +1185,8 @@ async function maybeFinalizeCampaign(campaignId: string) {
       completedAt: new Date(),
       phaseMessage:
         phase === 'failed'
-          ? `Failed — ${c.failedCount} failed, ${c.sentCount} sent`
-          : `Finished — ${c.sentCount} sent, ${c.failedCount} failed, ${c.skippedCount} skipped`,
+          ? `Failed — ${c.failedCount} failed, ${c.sentCount} sent.${skipNote}`
+          : `Finished — ${c.sentCount} sent, ${c.failedCount} failed, ${c.skippedCount} skipped.${skipNote}`,
       queuedCount: 0,
     },
   });
@@ -1140,7 +1194,7 @@ async function maybeFinalizeCampaign(campaignId: string) {
     c.userId,
     phase === 'failed' ? 'BROADCAST_FAILED' : 'BROADCAST_COMPLETED',
     phase === 'failed' ? 'Campaign failed' : 'Campaign completed',
-    `Campaign finished with ${c.sentCount} sent and ${c.failedCount} failed.`
+    `Campaign finished with ${c.sentCount} sent, ${c.failedCount} failed, ${c.skippedCount} skipped.`
   );
 }
 

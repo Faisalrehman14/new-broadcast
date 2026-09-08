@@ -222,18 +222,26 @@ export default function CampaignDetailPage() {
       </div>
 
       <div className="card overflow-hidden">
-        <div className="border-b border-slate-100 px-5 py-4 font-semibold">Recent failures</div>
+        <div className="border-b border-slate-100 px-5 py-4 font-semibold">Recent issues</div>
         {failures.length === 0 ? (
-          <p className="px-5 py-6 text-sm text-slate-500">No failures recorded.</p>
+          <p className="px-5 py-6 text-sm text-slate-500">No issues recorded.</p>
         ) : (
           <ul className="divide-y divide-slate-100 text-sm">
-            {failures.map((f) => (
-              <li key={f.id} className="px-5 py-3">
-                <span className="font-medium text-red-700">{f.code}</span>
-                <span className="text-slate-600"> — {f.message}</span>
-                {f.psid ? <span className="block text-xs text-slate-400">PSID {f.psid}</span> : null}
-              </li>
-            ))}
+            {failures.map((f) => {
+              const soft =
+                f.code === 'recipient_unavailable' ||
+                f.code === 'recipient_invalid' ||
+                /unavailable|matching user/i.test(f.message);
+              return (
+                <li key={f.id} className="px-5 py-3">
+                  <span className={`font-medium ${soft ? 'text-amber-700' : 'text-red-700'}`}>
+                    {f.code}
+                  </span>
+                  <span className="text-slate-600"> — {f.message}</span>
+                  {f.psid ? <span className="block text-xs text-slate-400">PSID {f.psid}</span> : null}
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>

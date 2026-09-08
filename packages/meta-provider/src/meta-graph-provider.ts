@@ -523,14 +523,7 @@ export class MetaGraphProvider implements MetaProvider {
       body: JSON.stringify(payload),
     });
     if (!res.ok) {
-      const errText = await res.text();
-      const err = new Error(`Meta send failed: ${res.status} ${errText}`) as Error & {
-        status?: number;
-        retryable?: boolean;
-      };
-      err.status = res.status;
-      err.retryable = res.status === 429 || res.status >= 500;
-      throw err;
+      throw buildMetaSendError(res.status, await res.text());
     }
     const data = (await res.json()) as { message_id: string; recipient_id: string };
     return { messageId: data.message_id, recipientId: data.recipient_id };
@@ -562,24 +555,54 @@ export class MetaGraphProvider implements MetaProvider {
       body: form.toString(),
     });
     if (!res.ok) {
-      const errText = await res.text();
-      const err = new Error(`Meta send failed: ${res.status} ${errText}`) as Error & {
-        status?: number;
-        retryable?: boolean;
-      };
-      err.status = res.status;
-      err.retryable = res.status === 429 || res.status >= 500 || /80001|80006|rate limit/i.test(errText);
-      throw err;
+      throw buildMetaSendError(res.status, await res.text());
     }
     const data = (await res.json()) as { message_id?: string; recipient_id?: string; error?: unknown };
     if (data.error) {
-      throw new Error(`Meta send failed: ${JSON.stringify(data.error)}`);
+      throw buildMetaSendError(400, JSON.stringify({ error: data.error }));
     }
     return {
       messageId: data.message_id || idempotencyKey,
       recipientId: data.recipient_id || recipientPsid,
     };
   }
+}
+
+function buildMetaSendError(status: number, errText: string): Error {
+  let code: number | undefined;
+  let subcode: number | undefined;
+  try {
+    const jsonStart = errText.indexOf('{');
+    if (jsonStart >= 0) {
+      const parsed = JSON.parse(errText.slice(jsonStart)) as {
+        error?: { code?: number; error_subcode?: number; message?: string };
+      };
+      code = parsed.error?.code;
+      subcode = parsed.error?.error_subcode;
+    }
+  } catch {
+    /* keep raw */
+  }
+  const err = new Error(`Meta send failed: ${status} ${errText}`) as Error & {
+    status?: number;
+    retryable?: boolean;
+    code?: number;
+    subcode?: number;
+  };
+  err.status = status;
+  err.code = code;
+  err.subcode = subcode;
+  err.retryable =
+    status === 429 ||
+    status >= 500 ||
+    code === 4 ||
+    code === 17 ||
+    code === 32 ||
+    code === 613 ||
+    code === 80001 ||
+    code === 80006 ||
+    /rate limit/i.test(errText);
+  return err;
 }
 
 const MS_24H = 24 * 60 * 60 * 1000;
