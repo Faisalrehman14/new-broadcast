@@ -168,6 +168,7 @@ export interface MetaProviderConfig {
 }
 
 export const META_OAUTH_SCOPES = [
+  'public_profile',
   'pages_show_list',
   'pages_messaging',
   'pages_manage_metadata',

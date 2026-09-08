@@ -110,17 +110,67 @@ export class MetaGraphProvider implements MetaProvider {
   }
 
   async getAuthorizedUser(userAccessToken: string): Promise<MetaAuthorizedUser> {
-    // Do not request email — many apps lack email permission and /me would still work for id/name,
-    // but some Graph configs reject unknown fields under strict mode.
+    // Prefer /me; fall back to debug_token (works even when public_profile is missing).
+    const attempts = ['id,name', 'id'] as const;
+    let lastErr = '';
+    for (const fields of attempts) {
+      const params = new URLSearchParams({
+        fields,
+        access_token: userAccessToken,
+      });
+      const res = await fetch(`${this.base()}/me?${params}`);
+      const raw = await res.text();
+      if (res.ok) {
+        try {
+          const data = JSON.parse(raw) as { id?: string; name?: string; email?: string; error?: unknown };
+          if (data.id && !data.error) {
+            return { id: String(data.id), name: data.name || 'Facebook User', email: data.email };
+          }
+          lastErr = raw.slice(0, 400);
+        } catch {
+          lastErr = raw.slice(0, 200);
+        }
+      } else {
+        lastErr = `${res.status} ${raw.slice(0, 400)}`;
+      }
+    }
+
+    const debugged = await this.debugUserToken(userAccessToken);
+    if (debugged?.userId) {
+      return { id: debugged.userId, name: 'Facebook User' };
+    }
+
+    throw new Error(`Meta getAuthorizedUser failed: ${lastErr || 'unknown'}`);
+  }
+
+  /** App-scoped user id from debug_token — does not need public_profile. */
+  async debugUserToken(userAccessToken: string): Promise<{ userId: string; scopes: string[] } | null> {
+    if (!this.config.appId || !this.config.appSecret) return null;
+    const appToken = `${this.config.appId}|${this.config.appSecret}`;
     const params = new URLSearchParams({
-      fields: 'id,name',
-      access_token: userAccessToken,
+      input_token: userAccessToken,
+      access_token: appToken,
     });
-    const res = await fetch(`${this.base()}/me?${params}`);
+    const res = await fetch(`${this.base()}/debug_token?${params}`);
     const raw = await res.text();
-    if (!res.ok) throw new Error(`Meta getAuthorizedUser failed: ${res.status} ${raw}`);
-    const data = JSON.parse(raw) as { id: string; name: string; email?: string };
-    return { id: data.id, name: data.name, email: data.email };
+    if (!res.ok) return null;
+    try {
+      const parsed = JSON.parse(raw) as {
+        data?: {
+          is_valid?: boolean;
+          user_id?: string | number;
+          scopes?: string[];
+        };
+      };
+      const userId = parsed.data?.user_id;
+      if (!parsed.data?.is_valid || userId == null) return null;
+      return {
+        userId: String(userId),
+        scopes: parsed.data.scopes || [],
+      };
+    } catch {
+      return null;
+    }
   }
 
   async getPages(userAccessToken: string): Promise<MetaPageSummary[]> {

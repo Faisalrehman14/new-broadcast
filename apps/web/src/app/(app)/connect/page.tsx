@@ -20,7 +20,8 @@ const ERROR_COPY: Record<string, string> = {
     'OAuth redirect_uri mismatch. META_REDIRECT_URI and Meta Valid OAuth Redirect URIs must match exactly (no trailing slash).',
   long_lived:
     'Long-lived token exchange failed — usually wrong META_APP_SECRET. Fix the secret, redeploy API, then reconnect.',
-  profile: 'Could not read your Facebook profile after login. Try again or check App permissions.',
+  profile:
+    'Could not read your Facebook profile after login. Ensure the Meta app includes public_profile, you are an App admin/tester (if app is in Development), then reconnect.',
   config: 'Server encryption/config error. Check ENCRYPTION_KEY on the API service.',
   facebook:
     'Facebook connect failed. Check META_APP_ID, META_APP_SECRET, META_REDIRECT_URI, and Meta Valid OAuth Redirect URIs, then reconnect.',

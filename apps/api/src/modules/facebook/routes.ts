@@ -63,7 +63,31 @@ export async function facebookRoutes(app: FastifyInstance) {
 
     try {
       const token = await metaProvider.exchangeCodeForToken(q.code, config.META_REDIRECT_URI);
-      const fbUser = await metaProvider.getAuthorizedUser(token.accessToken);
+      let fbUser: { id: string; name: string; email?: string };
+      try {
+        fbUser = await metaProvider.getAuthorizedUser(token.accessToken);
+      } catch (profileErr) {
+        // Reconnect resilience: if /me fails but token can list Pages, reuse existing FB account id.
+        logger.warn(
+          { err: profileErr, requestId: request.id },
+          'facebook /me failed; trying reconnect fallback'
+        );
+        const existing = await prisma.facebookAccount.findFirst({
+          where: { userId: user.id },
+          orderBy: { updatedAt: 'desc' },
+        });
+        let pages: Awaited<ReturnType<typeof metaProvider.getPages>> = [];
+        try {
+          pages = await metaProvider.getPages(token.accessToken);
+        } catch {
+          pages = [];
+        }
+        if (existing && pages.length > 0) {
+          fbUser = { id: existing.platformUserId, name: 'Facebook User' };
+        } else {
+          throw profileErr;
+        }
+      }
       const expiresAt = token.expiresIn
         ? new Date(Date.now() + token.expiresIn * 1000)
         : new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);

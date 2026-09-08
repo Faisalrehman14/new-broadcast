@@ -39,6 +39,7 @@ Add yourself under **App Roles**.
 
 Permissions requested by CastMe Pro:
 
+- `public_profile`
 - `pages_show_list`
 - `pages_messaging`
 - `pages_manage_metadata`
