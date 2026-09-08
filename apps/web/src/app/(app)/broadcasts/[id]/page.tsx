@@ -211,7 +211,13 @@ export default function CampaignDetailPage() {
                     <p className="mt-1 max-w-xs text-xs text-slate-500">{p.lastError}</p>
                   ) : null}
                 </td>
-                <td className="px-5 py-3">{p.templateReady ? 'Ready' : 'Pending'}</td>
+                <td className="px-5 py-3">
+                  {p.templateReady
+                    ? 'Ready'
+                    : /Utility Messaging|picker|outside 24h/i.test(p.lastError || '')
+                      ? 'Blocked'
+                      : 'Pending'}
+                </td>
                 <td className="px-5 py-3 tabular-nums">{p.recipientCount}</td>
                 <td className="px-5 py-3 tabular-nums text-emerald-700">{p.sentCount}</td>
                 <td className="px-5 py-3 tabular-nums text-red-700">{p.failedCount}</td>

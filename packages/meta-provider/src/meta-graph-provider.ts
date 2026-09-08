@@ -216,47 +216,67 @@ export class MetaGraphProvider implements MetaProvider {
     let lastErr = 'unknown';
     for (const useProof of [true, false]) {
       for (const fields of fieldSets) {
-        const params = new URLSearchParams({
-          fields,
-          access_token: userAccessToken,
-          limit: '100',
-        });
-        if (useProof) this.withProof(params, userAccessToken);
-        const res = await fetch(`${this.base()}/me/accounts?${params}`);
-        const raw = await res.text();
-        if (!res.ok) {
-          lastErr = `${res.status} ${raw.slice(0, 300)}`;
-          continue;
-        }
-        try {
-          const data = JSON.parse(raw) as {
-            data?: Array<{
-              id: string;
-              name: string;
-              access_token?: string;
-              category?: string;
-              tasks?: string[];
-              picture?: { data?: { url?: string } };
-            }>;
-            error?: unknown;
-          };
-          if (data.error) {
-            lastErr = raw.slice(0, 300);
-            continue;
+        const collected: MetaPageSummary[] = [];
+        let nextUrl: string | null =
+          `${this.base()}/me/accounts?` +
+          (() => {
+            const params = new URLSearchParams({
+              fields,
+              access_token: userAccessToken,
+              limit: '100',
+            });
+            if (useProof) this.withProof(params, userAccessToken);
+            return params.toString();
+          })();
+        let pageGuard = 0;
+        let okOnce = false;
+        while (nextUrl && pageGuard < 20) {
+          pageGuard += 1;
+          const res = await fetch(nextUrl);
+          const raw = await res.text();
+          if (!res.ok) {
+            lastErr = `${res.status} ${raw.slice(0, 300)}`;
+            okOnce = false;
+            break;
           }
-          return (data.data ?? [])
-            .filter((p) => p.id && p.access_token)
-            .map((p) => ({
-              id: p.id,
-              name: p.name || p.id,
-              accessToken: p.access_token as string,
-              category: p.category,
-              tasks: p.tasks,
-              pictureUrl: p.picture?.data?.url,
-            }));
-        } catch {
-          lastErr = raw.slice(0, 200);
+          try {
+            const data = JSON.parse(raw) as {
+              data?: Array<{
+                id: string;
+                name: string;
+                access_token?: string;
+                category?: string;
+                tasks?: string[];
+                picture?: { data?: { url?: string } };
+              }>;
+              paging?: { next?: string };
+              error?: unknown;
+            };
+            if (data.error) {
+              lastErr = raw.slice(0, 300);
+              okOnce = false;
+              break;
+            }
+            okOnce = true;
+            for (const p of data.data ?? []) {
+              if (!p.id || !p.access_token) continue;
+              collected.push({
+                id: p.id,
+                name: p.name || p.id,
+                accessToken: p.access_token,
+                category: p.category,
+                tasks: p.tasks,
+                pictureUrl: p.picture?.data?.url,
+              });
+            }
+            nextUrl = data.paging?.next || null;
+          } catch {
+            lastErr = raw.slice(0, 200);
+            okOnce = false;
+            break;
+          }
         }
+        if (okOnce) return collected;
       }
     }
     throw new Error(`Meta getPages failed: ${lastErr}`);

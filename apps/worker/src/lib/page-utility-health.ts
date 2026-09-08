@@ -57,29 +57,53 @@ function grantUtilityForPage(data: DebugTokenData | null, pageId: string): boole
   return false;
 }
 
+/** Paginate /me/accounts so multi-Page workspaces are not truncated at 100. */
+export async function listMeAccountsPages(params: {
+  graphVersion: string;
+  userAccessToken: string;
+}): Promise<{ ok: boolean; pages: Array<{ id: string; access_token?: string }> }> {
+  const pages: Array<{ id: string; access_token?: string }> = [];
+  let url: string | null =
+    `https://graph.facebook.com/${params.graphVersion}/me/accounts?` +
+    new URLSearchParams({
+      fields: 'id,name,access_token',
+      access_token: params.userAccessToken,
+      limit: '100',
+    }).toString();
+
+  let guard = 0;
+  while (url && guard < 20) {
+    guard += 1;
+    const res = await fetch(url);
+    if (!res.ok) return { ok: false, pages };
+    try {
+      const json = (await res.json()) as {
+        data?: Array<{ id: string; access_token?: string }>;
+        paging?: { next?: string };
+        error?: unknown;
+      };
+      if (json.error) return { ok: false, pages };
+      pages.push(...(json.data || []));
+      url = json.paging?.next || null;
+    } catch {
+      return { ok: false, pages };
+    }
+  }
+  return { ok: true, pages };
+}
+
 export async function resolveMeAccountsPageToken(params: {
   graphVersion: string;
   userAccessToken: string;
   platformPageId: string;
 }): Promise<string | null> {
-  const qs = new URLSearchParams({
-    fields: 'id,name,access_token',
-    access_token: params.userAccessToken,
-    limit: '100',
+  const listed = await listMeAccountsPages({
+    graphVersion: params.graphVersion,
+    userAccessToken: params.userAccessToken,
   });
-  const res = await fetch(
-    `https://graph.facebook.com/${params.graphVersion}/me/accounts?${qs}`
-  );
-  if (!res.ok) return null;
-  try {
-    const json = (await res.json()) as {
-      data?: Array<{ id: string; access_token?: string }>;
-    };
-    const hit = (json.data || []).find((p) => String(p.id) === String(params.platformPageId));
-    return hit?.access_token || null;
-  } catch {
-    return null;
-  }
+  if (!listed.ok) return null;
+  const hit = listed.pages.find((p) => String(p.id) === String(params.platformPageId));
+  return hit?.access_token || null;
 }
 
 /**
@@ -96,13 +120,18 @@ export async function assessPageUtilityEligibility(params: {
 }): Promise<UtilityEligibility> {
   const pid = String(params.platformPageId);
   let pageTokenFromAccounts: string | null = null;
+  let accountsListedOk = false;
 
   if (params.userAccessToken) {
-    pageTokenFromAccounts = await resolveMeAccountsPageToken({
+    const listed = await listMeAccountsPages({
       graphVersion: params.graphVersion,
       userAccessToken: params.userAccessToken,
-      platformPageId: pid,
     });
+    accountsListedOk = listed.ok;
+    if (listed.ok) {
+      const hit = listed.pages.find((p) => String(p.id) === pid);
+      pageTokenFromAccounts = hit?.access_token || null;
+    }
   }
 
   const debugUser = params.userAccessToken
@@ -119,8 +148,7 @@ export async function assessPageUtilityEligibility(params: {
   if (grant === false) {
     return {
       eligible: false,
-      reason:
-        'This Page is missing Utility Messaging. Reconnect Facebook, tick this Page in the picker, and approve pages_utility_messaging.',
+      reason: PAGE_UTILITY_PICKER_MESSAGE,
       pageTokenFromAccounts,
     };
   }
@@ -134,7 +162,16 @@ export async function assessPageUtilityEligibility(params: {
     };
   }
 
-  // Page token works for templates but may still POST UTILITY as Graph #10 if not from picker.
+  // User token can list accounts, but this Page was not ticked in the picker.
+  // Do NOT mark ready — stale Page tokens still list templates but UTILITY POST fails as outside_window.
+  if (accountsListedOk && grant !== true) {
+    return {
+      eligible: false,
+      reason: PAGE_UTILITY_PICKER_MESSAGE,
+      pageTokenFromAccounts: null,
+    };
+  }
+
   if (grant === true) {
     return {
       eligible: true,

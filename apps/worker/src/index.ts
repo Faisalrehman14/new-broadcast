@@ -69,16 +69,18 @@ function isAccessTokenDeadError(msg: string): boolean {
 /** Remint /me/accounts once per campaign page (multi-page parallel was hammering Graph). */
 const remintedPageTokens = new Map<string, { token: string; at: number }>();
 const REMINT_TTL_MS = 10 * 60 * 1000;
+/** One remint+UTILITY retry per campaign page after first outside-window rejection. */
+const utilityRemintRetried = new Set<string>();
 
 async function resolveCampaignPageToken(cp: {
   id: string;
   pageId: string;
   platformPageId: string;
   encryptedPageToken: string | null;
-}): Promise<string> {
+}, opts?: { force?: boolean }): Promise<string> {
   if (!cp.encryptedPageToken) throw new Error('Missing page token');
   const cached = remintedPageTokens.get(cp.id);
-  if (cached && Date.now() - cached.at < REMINT_TTL_MS) return cached.token;
+  if (!opts?.force && cached && Date.now() - cached.at < REMINT_TTL_MS) return cached.token;
 
   let token = decryptSecret(cp.encryptedPageToken);
   const page = await prisma.facebookPage.findUnique({
@@ -843,7 +845,7 @@ async function handleCampaignRun(job: Job) {
           pageId: cp.platformPageId,
           pageAccessToken: token,
           templateName,
-          retries: 25,
+          retries: 40,
           intervalMs: 3000,
         });
         created = {
@@ -1255,31 +1257,57 @@ async function handleCampaignSend(job: Job) {
       if (templateName !== PLAIN_UTILITY_TEMPLATE_NAME && params.length === 0) {
         params.push(recipient.name || personalized || 'Customer');
       }
-      try {
-        result = await meta.sendUtilityMessage({
+      const sendUtility = async (pageToken: string) =>
+        meta.sendUtilityMessage({
           pageId: cp.platformPageId,
-          pageAccessToken: token,
+          pageAccessToken: pageToken,
           recipientPsid: recipient.psid,
           templateName,
           languageCode: templateLanguage,
           bodyParameters: params.length ? params : [personalized],
           idempotencyKey: recipient.idempotencyKey,
         });
+      try {
+        result = await sendUtility(token);
       } catch (utilErr) {
-        const wrapped = Object.assign(
-          new Error(
-            `UTILITY send failed outside 24h window: ${utilErr instanceof Error ? utilErr.message : String(utilErr)}`
-          ),
-          utilErr instanceof Error
-            ? {
-                status: (utilErr as Error & { status?: number }).status,
-                code: (utilErr as Error & { code?: number }).code,
-                subcode: (utilErr as Error & { subcode?: number }).subcode,
-                retryable: (utilErr as Error & { retryable?: boolean }).retryable,
-              }
-            : {}
-        );
-        throw wrapped;
+        // Reference: remint Page token once, then retry UTILITY before aborting the Page.
+        if (!utilityRemintRetried.has(cp.id)) {
+          utilityRemintRetried.add(cp.id);
+          try {
+            const fresh = await resolveCampaignPageToken(cp, { force: true });
+            result = await sendUtility(fresh);
+          } catch (retryErr) {
+            const wrapped = Object.assign(
+              new Error(
+                `UTILITY send failed outside 24h window: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`
+              ),
+              retryErr instanceof Error
+                ? {
+                    status: (retryErr as Error & { status?: number }).status,
+                    code: (retryErr as Error & { code?: number }).code,
+                    subcode: (retryErr as Error & { subcode?: number }).subcode,
+                    retryable: (retryErr as Error & { retryable?: boolean }).retryable,
+                  }
+                : {}
+            );
+            throw wrapped;
+          }
+        } else {
+          const wrapped = Object.assign(
+            new Error(
+              `UTILITY send failed outside 24h window: ${utilErr instanceof Error ? utilErr.message : String(utilErr)}`
+            ),
+            utilErr instanceof Error
+              ? {
+                  status: (utilErr as Error & { status?: number }).status,
+                  code: (utilErr as Error & { code?: number }).code,
+                  subcode: (utilErr as Error & { subcode?: number }).subcode,
+                  retryable: (utilErr as Error & { retryable?: boolean }).retryable,
+                }
+              : {}
+          );
+          throw wrapped;
+        }
       }
     } else {
       await refundQuota(campaign.userId, quotaUnits);
