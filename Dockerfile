@@ -31,7 +31,7 @@ COPY --from=build /app /app
 WORKDIR /app
 ENV NODE_ENV=production
 EXPOSE 4000
-CMD ["sh", "-c", "npx prisma migrate deploy --schema apps/api/prisma/schema.prisma && node apps/api/dist/server.js"]
+CMD ["npm", "run", "start:prod", "-w", "@pagebroadcast/api"]
 
 FROM base AS worker
 COPY --from=build /app /app

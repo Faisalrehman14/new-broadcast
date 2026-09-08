@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
@@ -94,6 +95,19 @@ export async function buildApp() {
           requestId: request.id,
         },
       });
+    }
+    if (err instanceof Prisma.PrismaClientKnownRequestError) {
+      logger.error({ err, request_id: request.id, code: err.code }, 'prisma error');
+      if (err.code === 'P2021' || err.code === 'P2022') {
+        return reply.code(503).send({
+          error: {
+            code: 'DB_NOT_READY',
+            message:
+              'Database tables are missing. The API is applying migrations — retry in a minute.',
+            requestId: request.id,
+          },
+        });
+      }
     }
     logger.error({ err, request_id: request.id }, 'unhandled error');
     return reply.code(500).send({
