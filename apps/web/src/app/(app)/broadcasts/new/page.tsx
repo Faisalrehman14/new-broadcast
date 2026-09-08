@@ -19,6 +19,8 @@ type PageRow = {
   contactCount: number;
   hasPageToken?: boolean;
   status: string;
+  utilityReady?: boolean;
+  utilityStatus?: string;
 };
 
 type SpeedId = (typeof SPEED_PRESETS)[number]['id'];
@@ -73,18 +75,30 @@ export default function NewCampaignPage() {
       api<{ pages: Array<{ page_id: string; contact_count: number }> }>(
         '/api/broadcast/audience/status'
       ),
+      api<{
+        pages: Array<{ page_id: string; ready: boolean; status: string }>;
+      }>('/api/broadcast/utility-status').catch(() => ({ pages: [] as Array<{ page_id: string; ready: boolean; status: string }> })),
     ])
-      .then(([me, tpl, audience]) => {
+      .then(([me, tpl, audience, utility]) => {
         const counts = new Map(audience.pages.map((p) => [p.page_id, p.contact_count]));
+        const util = new Map(utility.pages.map((p) => [p.page_id, p]));
         const rows = me.pages.map((p) => ({
           ...p,
           contactCount: counts.get(p.pageId) ?? p.contactCount ?? 0,
+          utilityReady: util.get(p.pageId)?.ready,
+          utilityStatus: util.get(p.pageId)?.status,
         }));
         setPages(rows);
         setSelected(rows.filter((p) => p.hasPageToken !== false).map((p) => p.pageId));
         setHasLiveToken(me.hasLiveToken !== false);
         setQuota(me.quota?.creditsRemaining ?? null);
         setStarters(mergeStarters(tpl.starters || []));
+        // Kick auto-approve in background for any Page missing Instant UTILITY
+        if (rows.some((p) => !p.utilityReady)) {
+          void api('/api/broadcast/auto-utility', { method: 'POST', body: JSON.stringify({}) }).catch(
+            () => undefined
+          );
+        }
       })
       .finally(() => setLoading(false));
   }, []);
@@ -258,32 +272,37 @@ export default function NewCampaignPage() {
       const res = await api<{
         ok: number;
         failed: number;
+        message?: string;
         results: Array<{ page_id: string; page_name?: string; status: string; error?: string }>;
       }>('/api/broadcast/prepare-instant', {
         method: 'POST',
         body: JSON.stringify({ page_ids: selected }),
       });
       const failedRows = res.results.filter((r) => r.status === 'error' || r.status === 'REJECTED');
-      if (failedRows.length && !res.ok) {
+      if (res.ok > 0) {
+        setToast(
+          res.message ||
+            `Auto UTILITY queued on ${res.ok} Page(s) — Meta approval polled in background.`
+        );
+      }
+      if (failedRows.length) {
         setError(
           failedRows
             .slice(0, 3)
             .map((r) => `${r.page_name || r.page_id}: ${r.error || r.status}`)
             .join(' · ')
         );
-      } else if (failedRows.length) {
-        setToast(
-          `Instant UTILITY: ${res.ok} Pages OK, ${res.failed} need Reconnect (tick Page + Utility Messaging).`
-        );
-        setError(
-          failedRows
-            .slice(0, 2)
-            .map((r) => `${r.page_name || 'Page'}: ${r.error || r.status}`)
-            .join(' · ')
-        );
-      } else {
-        setToast(
-          `Instant plain UTILITY ready on ${res.ok} Page(s). Use Instant templates — no per-copy Meta wait.`
+      }
+      // Refresh ready badges
+      const status = await api<{
+        pages: Array<{ page_id: string; ready: boolean; status: string }>;
+      }>('/api/broadcast/utility-status').catch(() => null);
+      if (status) {
+        setPages((prev) =>
+          prev.map((p) => {
+            const hit = status.pages.find((x) => x.page_id === p.pageId);
+            return hit ? { ...p, utilityReady: hit.ready, utilityStatus: hit.status } : p;
+          })
         );
       }
     } catch (err) {
@@ -292,6 +311,22 @@ export default function NewCampaignPage() {
           ? err.message
           : 'Prepare failed. Reconnect Facebook, tick every Page, grant Utility Messaging.'
       );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function autoUtilityAll() {
+    setBusy(true);
+    setError('');
+    try {
+      const res = await api<{ enqueued: number; message?: string }>('/api/broadcast/auto-utility', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      setToast(res.message || `Auto UTILITY queued on ${res.enqueued} Page(s).`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Auto UTILITY failed');
     } finally {
       setBusy(false);
     }
@@ -477,6 +512,14 @@ export default function NewCampaignPage() {
             >
               Prepare Instant UTILITY
             </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={busy}
+              onClick={autoUtilityAll}
+            >
+              Auto-approve all Pages
+            </button>
           </div>
 
           <div className="grid gap-2 sm:grid-cols-2">
@@ -504,6 +547,11 @@ export default function NewCampaignPage() {
                     <span className="mt-0.5 block text-xs text-slate-500">
                       {(p.contactCount || 0).toLocaleString()} contacts ·{' '}
                       {p.hasPageToken === false ? 'no token' : 'token ok'}
+                      {p.utilityReady
+                        ? ' · UTILITY ready'
+                        : p.utilityStatus
+                          ? ` · UTILITY ${p.utilityStatus}`
+                          : ' · UTILITY auto…'}
                     </span>
                   </span>
                 </label>

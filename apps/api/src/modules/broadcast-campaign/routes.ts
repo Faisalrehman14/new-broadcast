@@ -23,6 +23,7 @@ import { enqueue, QUEUE_NAMES } from '../../lib/queues.js';
 import { writeAuditLog } from '../../lib/audit.js';
 import { assertUserOwnsPage } from '../../lib/ownership.js';
 import { logger } from '../../lib/logger.js';
+import { enqueueUtilityEnsure, enqueueUtilityEnsureForUser } from '../../lib/utility-auto.js';
 
 async function remintPageAccessToken(page: {
   id: string;
@@ -328,6 +329,16 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
     });
 
     await enqueue(QUEUE_NAMES.CAMPAIGN_RUN, { campaignId: campaign.id }, { jobId: `campaign-${campaign.id}` });
+
+    // Kick Instant plain UTILITY ensure/poll on every campaign Page (background).
+    for (const [i, p] of okPages.entries()) {
+      void enqueueUtilityEnsure(p.page!.id, {
+        waitForApproved: true,
+        userId: user.id,
+        delayMs: i * 800,
+      });
+    }
+
     await writeAuditLog({
       actorId: user.id,
       action: 'campaign.created',
@@ -622,7 +633,7 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
     }
   });
 
-  /** Batch prepare Instant plain UTILITY on many Pages — soft-fails per Page. */
+  /** Batch prepare Instant plain UTILITY — queues background Meta create+poll on all Pages. */
   app.post('/api/broadcast/prepare-instant', async (request) => {
     const user = await requireUser(request);
     requireCsrf(request);
@@ -634,18 +645,27 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
       page_name?: string;
       status: string;
       error?: string;
+      queued?: boolean;
     }> = [];
 
-    for (const pageId of body.page_ids) {
+    for (const [i, pageId] of body.page_ids.entries()) {
       try {
         await assertUserOwnsPage(user.id, pageId);
         const page = await prisma.facebookPage.findUnique({ where: { id: pageId } });
+        // Fast path: sync list/create without long wait
         const result = await ensurePlainUtilityOnPage(pageId);
+        // Background: keep polling until APPROVED
+        void enqueueUtilityEnsure(pageId, {
+          waitForApproved: true,
+          userId: user.id,
+          delayMs: 1000 + i * 500,
+        });
         results.push({
           page_id: pageId,
           page_name: page?.name,
           status: result.status,
           error: result.error,
+          queued: true,
         });
       } catch (err) {
         results.push({
@@ -658,7 +678,62 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
 
     const ok = results.filter((r) => r.status === 'APPROVED' || r.status === 'PENDING').length;
     const failed = results.filter((r) => r.status === 'error' || r.status === 'REJECTED').length;
-    return { results, ok, failed, template_name: PLAIN_UTILITY_TEMPLATE_NAME };
+    return {
+      results,
+      ok,
+      failed,
+      template_name: PLAIN_UTILITY_TEMPLATE_NAME,
+      message:
+        'Instant plain UTILITY submitted on selected Pages. Worker will keep polling Meta until APPROVED.',
+    };
+  });
+
+  /** Auto-approve Instant UTILITY on every connected Page (background). */
+  app.post('/api/broadcast/auto-utility', async (request) => {
+    const user = await requireUser(request);
+    requireCsrf(request);
+    await requirePermission(user, 'broadcast.send');
+    const queued = await enqueueUtilityEnsureForUser(user.id, {
+      waitForApproved: true,
+      delayMs: 500,
+    });
+    return {
+      success: true,
+      ...queued,
+      message: `Queued Instant UTILITY auto-approve on ${queued.enqueued} Page(s). Meta approval is polled in the background.`,
+    };
+  });
+
+  app.get('/api/broadcast/utility-status', async (request) => {
+    const user = await requireUser(request);
+    const connections = await prisma.pageConnection.findMany({
+      where: { userId: user.id, status: { not: 'DISCONNECTED' } },
+      include: {
+        page: {
+          include: {
+            utilityTemplates: {
+              where: { templateName: PLAIN_UTILITY_TEMPLATE_NAME },
+              orderBy: { updatedAt: 'desc' },
+              take: 3,
+            },
+          },
+        },
+      },
+    });
+    return {
+      template_name: PLAIN_UTILITY_TEMPLATE_NAME,
+      pages: connections.map((c) => {
+        const approved = c.page.utilityTemplates.find((t) => t.status === 'APPROVED');
+        const latest = approved || c.page.utilityTemplates[0];
+        return {
+          page_id: c.pageId,
+          name: c.page.name,
+          status: latest?.status || 'missing',
+          language: latest?.language || null,
+          ready: Boolean(approved),
+        };
+      }),
+    };
   });
 
   app.post('/api/broadcast/prepare-starter-pack', async (request) => {

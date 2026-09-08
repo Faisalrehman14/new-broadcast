@@ -13,6 +13,7 @@ import { notifyUser } from '../../lib/notify.js';
 import { assertUserOwnsPage } from '../../lib/ownership.js';
 import { requireCsrf } from '../../lib/csrf.js';
 import { logger } from '../../lib/logger.js';
+import { enqueueUtilityEnsure, enqueueUtilityEnsureForUser } from '../../lib/utility-auto.js';
 
 const OAUTH_STATE_COOKIE = 'pb_oauth_state';
 
@@ -189,6 +190,11 @@ export async function facebookRoutes(app: FastifyInstance) {
         ip: request.ip,
         metadata: { longLived, reminted, metaPageCount },
       });
+
+      // Auto-submit Instant plain UTILITY on every connected Page and poll Meta approval.
+      void enqueueUtilityEnsureForUser(user.id, { waitForApproved: true, delayMs: 3000 }).catch(
+        (err) => logger.warn({ err, userId: user.id }, 'auto utility ensure enqueue failed')
+      );
 
       const warn =
         metaPageCount === 0
@@ -404,11 +410,13 @@ export async function facebookRoutes(app: FastifyInstance) {
           userId: user.id,
         });
         const activated = await activateMessengerTemplatesForPage({ pageId: page.id });
+        void enqueueUtilityEnsure(page.id, { waitForApproved: true, userId: user.id, delayMs: 2000 });
         results.push({
           pageId: page.id,
           status: 'reconnected',
           syncJobId: syncJob.id,
           templatesActivated: activated.activated,
+          utilityEnsureQueued: true,
         });
         continue;
       }
@@ -433,6 +441,7 @@ export async function facebookRoutes(app: FastifyInstance) {
       });
 
       const activated = await activateMessengerTemplatesForPage({ pageId: page.id });
+      void enqueueUtilityEnsure(page.id, { waitForApproved: true, userId: user.id, delayMs: 2000 });
 
       await writeAuditLog({
         actorId: user.id,
@@ -453,6 +462,7 @@ export async function facebookRoutes(app: FastifyInstance) {
         syncJobId: syncJob.id,
         status: 'connected',
         templatesActivated: activated.activated,
+        utilityEnsureQueued: true,
       });
     }
 

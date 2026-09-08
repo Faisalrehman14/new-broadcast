@@ -16,6 +16,7 @@ import {
   assessPageUtilityEligibility,
   PAGE_UTILITY_PICKER_MESSAGE,
 } from './lib/page-utility-health.js';
+import { ensurePlainUtilityForPage } from './lib/ensure-plain-utility.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
@@ -127,6 +128,7 @@ const QUEUE = {
   CAMPAIGN_RUN: 'campaign-run',
   CAMPAIGN_SEND: 'campaign-send',
   CAMPAIGN_RESUME: 'campaign-resume',
+  UTILITY_ENSURE: 'utility-ensure',
   NOTIFICATIONS: 'notifications',
   ANALYTICS: 'analytics',
 } as const;
@@ -1585,6 +1587,67 @@ async function maybeFinalizeCampaign(campaignId: string) {
   );
 }
 
+async function handleUtilityEnsure(job: Job) {
+  const { pageId, waitForApproved, userId } = job.data as {
+    pageId: string;
+    waitForApproved?: boolean;
+    userId?: string | null;
+  };
+  if (!pageId) return;
+
+  const result = await ensurePlainUtilityForPage({
+    prisma,
+    meta,
+    pageId,
+    decryptSecret,
+    encryptSecret,
+    waitForApproved: waitForApproved !== false,
+    log: (obj, msg) => logger.warn(obj, msg),
+  });
+
+  logger.info(
+    { pageId, status: result.status, userId, error: result.error },
+    'utility ensure finished'
+  );
+}
+
+/** Periodic: ensure Instant plain UTILITY on every Page that still lacks APPROVED. */
+async function handleUtilityEnsureScan(_job: Job) {
+  const pages = await prisma.facebookPage.findMany({
+    where: {
+      connections: { some: { status: { not: 'DISCONNECTED' } } },
+    },
+    select: {
+      id: true,
+      utilityTemplates: {
+        where: { templateName: 'castme_plain_utility_v1', status: 'APPROVED' },
+        take: 1,
+      },
+    },
+    take: 200,
+  });
+
+  const utilityQueue = new Queue(QUEUE.UTILITY_ENSURE, { connection });
+  let enqueued = 0;
+  for (const page of pages) {
+    if (page.utilityTemplates.length) continue;
+    await utilityQueue.add(
+      QUEUE.UTILITY_ENSURE,
+      { pageId: page.id, waitForApproved: true },
+      {
+        jobId: `ue-scan-${page.id}-${Math.floor(Date.now() / 600_000)}`,
+        attempts: 2,
+        backoff: { type: 'exponential', delay: 5000 },
+        removeOnComplete: 500,
+        removeOnFail: 1000,
+      }
+    );
+    enqueued += 1;
+  }
+  await utilityQueue.close();
+  logger.info({ checked: pages.length, enqueued }, 'utility ensure scan');
+}
+
 function makeWorker(name: string, processor: (job: Job) => Promise<void>, concurrency = 2) {
   const worker = new Worker(name, processor, {
     connection,
@@ -1608,15 +1671,41 @@ const workers = [
   makeWorker(QUEUE.CAMPAIGN_RUN, handleCampaignRun, 1),
   makeWorker(QUEUE.CAMPAIGN_SEND, handleCampaignSend, config.BROADCAST_CONCURRENT_SENDS),
   makeWorker(QUEUE.CAMPAIGN_RESUME, handleCampaignResume, 1),
+  makeWorker(
+    QUEUE.UTILITY_ENSURE,
+    async (job) => {
+      if (job.name === 'utility-ensure-scan' || (job.data as { scan?: boolean })?.scan) {
+        return handleUtilityEnsureScan(job);
+      }
+      return handleUtilityEnsure(job);
+    },
+    2
+  ),
   makeWorker(QUEUE.NOTIFICATIONS, async () => undefined, 1),
   makeWorker(QUEUE.ANALYTICS, async () => undefined, 1),
 ];
+
+const utilityScanQueue = new Queue(QUEUE.UTILITY_ENSURE, { connection });
+void utilityScanQueue
+  .add(
+    'utility-ensure-scan',
+    { scan: true },
+    {
+      jobId: 'utility-ensure-scan-repeat',
+      repeat: { every: 15 * 60 * 1000 },
+      removeOnComplete: 50,
+      removeOnFail: 50,
+    }
+  )
+  .then(() => logger.info('utility ensure scan scheduled every 15m'))
+  .catch((err) => logger.warn({ err }, 'utility ensure scan schedule failed'));
 
 logger.info({ queues: Object.values(QUEUE), provider: config.META_PROVIDER }, 'workers started');
 
 async function shutdown() {
   logger.info('shutting down workers');
   await Promise.all(workers.map((w) => w.close()));
+  await utilityScanQueue.close();
   await campaignSendQueue.close();
   await campaignRunQueue.close();
   await connection.quit();
