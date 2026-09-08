@@ -49,7 +49,7 @@ FROM base AS worker
 COPY --from=build-backend /app /app
 WORKDIR /app
 ENV NODE_ENV=production
-CMD ["node", "apps/worker/dist/index.js"]
+CMD ["sh", "-c", "npx prisma generate --schema apps/api/prisma/schema.prisma && node apps/worker/dist/index.js"]
 
 FROM base AS web
 COPY --from=build-web /app /app

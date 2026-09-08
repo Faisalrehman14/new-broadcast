@@ -6,12 +6,13 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "prisma migrate deploy --schema ./prisma/schema.prisma && prisma db seed --schema ./prisma/schema.prisma && node dist/server.js",
-    "start:prod": "npx prisma migrate deploy --schema apps/api/prisma/schema.prisma && npx prisma db seed --schema apps/api/prisma/schema.prisma && node apps/api/dist/server.js",
+    "start": "prisma generate --schema ./prisma/schema.prisma && prisma migrate deploy --schema ./prisma/schema.prisma && node dist/server.js",
+    "start:prod": "npx prisma generate --schema apps/api/prisma/schema.prisma && npx prisma migrate deploy --schema apps/api/prisma/schema.prisma && node apps/api/dist/server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:seed": "tsx prisma/seed.ts",
+    "start:with-seed": "npx prisma generate --schema apps/api/prisma/schema.prisma && npx prisma migrate deploy --schema apps/api/prisma/schema.prisma && npx prisma db seed --schema apps/api/prisma/schema.prisma && node apps/api/dist/server.js",
     "test": "node --import tsx --test src/lib/state-crypto.test.ts src/lib/campaign.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

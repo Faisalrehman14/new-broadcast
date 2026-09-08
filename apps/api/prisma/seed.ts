@@ -1,11 +1,15 @@
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
-import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { parseTemplateVariables } from '@pagebroadcast/validation';
 import { SEED_TEMPLATES } from './seed-templates.js';
 import { FREE_TRIAL, PAID_PLANS, addDays } from '../src/lib/plans.js';
+
+// ESM + tsx can fail named import from CJS @prisma/client when client was just generated.
+const require = createRequire(import.meta.url);
+const { PrismaClient } = require('@prisma/client') as typeof import('@prisma/client');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
