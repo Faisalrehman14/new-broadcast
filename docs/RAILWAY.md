@@ -56,28 +56,11 @@ NEXT_PUBLIC_API_URL=https://<api-service>.up.railway.app
 
 ## 3. Per-service settings
 
-**Root Directory** for every service: leave **empty** (repo root) — this is an npm workspaces monorepo.
+**Root Directory:** leave empty (repo root).
 
-### web
+**Config-as-code:** each app has `railway.json` that builds the root `Dockerfile` with the correct target (`api` / `web` / `worker`).
 
-- **Build:** `npm install && npm run build -w @pagebroadcast/web`
-- **Start:** `npm run start -w @pagebroadcast/web`
-- Generate domain (public)
-
-### api
-
-- **Build:** `npm install && npm run build -w @pagebroadcast/types && npm run build -w @pagebroadcast/config && npm run build -w @pagebroadcast/validation && npm run build -w @pagebroadcast/meta-provider && npx prisma generate --schema apps/api/prisma/schema.prisma && npm run build -w @pagebroadcast/api`
-- **Start:** `npx prisma migrate deploy --schema apps/api/prisma/schema.prisma && npm run start -w @pagebroadcast/api`
-- Generate domain (public)
-- Optional one-time: run seed via Railway shell  
-  `npx prisma db seed --schema apps/api/prisma/schema.prisma`
-
-### worker
-
-- Same **Build** as api (needs Prisma client + packages)
-- **Start:** `npm run start -w @pagebroadcast/worker`
-- No public domain needed
-
+If Railway still shows an old `redis-memory-server` / `make: not found` error, trigger a **clear rebuild** (Redeploy without cache) so it picks up the latest `main` commit.
 ## 4. Apply & Deploy
 
 1. Fix yellow settings on each card  

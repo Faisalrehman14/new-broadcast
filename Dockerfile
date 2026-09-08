@@ -1,10 +1,10 @@
-# Multi-stage production image for PageBroadcast
+# CastMe Pro — multi-stage production images
 FROM node:20-bookworm-slim AS base
 WORKDIR /app
 RUN apt-get update && apt-get install -y openssl ca-certificates && rm -rf /var/lib/apt/lists/*
 
 FROM base AS deps
-COPY package.json ./
+COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
 COPY apps/worker/package.json apps/worker/
@@ -12,7 +12,8 @@ COPY packages/types/package.json packages/types/
 COPY packages/validation/package.json packages/validation/
 COPY packages/config/package.json packages/config/
 COPY packages/meta-provider/package.json packages/meta-provider/
-RUN npm install
+# ignore-scripts: never run local-only postinstalls (e.g. redis-memory-server)
+RUN npm ci --ignore-scripts
 
 FROM deps AS build
 COPY . .

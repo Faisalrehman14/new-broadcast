@@ -1,0 +1,12 @@
+node_modules
+.next
+.data
+.git
+.env
+.env.*
+!.env.example
+*.log
+coverage
+dist
+tmp
+uploads
