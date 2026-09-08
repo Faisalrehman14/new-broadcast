@@ -1,19 +1,21 @@
-import { Redis } from 'ioredis';
-import { Worker, Queue, type Job } from 'bullmq';
-import { PrismaClient } from '@prisma/client';
+import { loadWorkerConfig } from '@pagebroadcast/config';
 import { createMetaProvider } from '@pagebroadcast/meta-provider';
-import { loadConfig } from '@pagebroadcast/config';
 import { renderTemplatePreview } from '@pagebroadcast/validation';
 import { createDecipheriv } from 'node:crypto';
 import pino from 'pino';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
+import { Redis } from 'ioredis';
+import { Worker, Queue, type Job } from 'bullmq';
+import { PrismaClient } from '@prisma/client';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
+dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+dotenv.config({ path: path.resolve(process.cwd(), '../../.env') });
 
-const config = loadConfig(process.env);
+const config = loadWorkerConfig(process.env);
 const logger = pino({ level: config.LOG_LEVEL, base: { service: 'castmepro-worker' } });
 const prisma = new PrismaClient();
 const connection = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
