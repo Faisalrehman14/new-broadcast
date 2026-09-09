@@ -19,6 +19,7 @@ import {
 type PageRow = {
   pageId: string;
   name: string;
+  profileImage?: string | null;
   contactCount: number;
   hasPageToken?: boolean;
   status: string;
@@ -91,6 +92,7 @@ export default function NewCampaignPage() {
   const [approvedPageCount, setApprovedPageCount] = useState(0);
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
+  const [utilityHintDismissed, setUtilityHintDismissed] = useState(false);
   const messageRef = useRef<HTMLDivElement>(null);
   const librarySnapshotRef = useRef<{
     slots: string[];
@@ -99,6 +101,14 @@ export default function NewCampaignPage() {
     approvedPageCount: number;
     focusedSlot: number;
   } | null>(null);
+
+  useEffect(() => {
+    try {
+      setUtilityHintDismissed(sessionStorage.getItem('pb_utility_hint_dismissed') === '1');
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   useEffect(() => {
     Promise.all([
@@ -121,25 +131,39 @@ export default function NewCampaignPage() {
         pages: [] as Array<{ page_id: string; ready: boolean; status: string }>,
       })),
     ])
-      .then(([me, tpl, audienceStatus, utility]) => {
+      .then(async ([me, tpl, audienceStatus, utility]) => {
         const counts = new Map(audienceStatus.pages.map((p) => [p.page_id, p.contact_count]));
-        const util = new Map(utility.pages.map((p) => [p.page_id, p]));
-        const rows = me.pages.map((p) => ({
+        let util = new Map(utility.pages.map((p) => [p.page_id, p]));
+        let rows = me.pages.map((p) => ({
           ...p,
           contactCount: counts.get(p.pageId) ?? p.contactCount ?? 0,
           utilityReady: util.get(p.pageId)?.ready,
           utilityStatus: util.get(p.pageId)?.status,
         }));
         setPages(rows);
-        setSelected(rows.filter((p) => p.hasPageToken !== false).map((p) => p.pageId));
+        // Intentional pick — never auto-select every page
+        setSelected([]);
         setHasLiveToken(me.hasLiveToken !== false);
         setQuota(me.quota?.creditsRemaining ?? null);
         setStarters(mergeStarters(tpl.starters || []));
+
         if (rows.some((p) => !p.utilityReady)) {
-          void api('/api/broadcast/auto-utility', {
+          await api('/api/broadcast/auto-utility', {
             method: 'POST',
             body: JSON.stringify({}),
           }).catch(() => undefined);
+          const refreshed = await api<{
+            pages: Array<{ page_id: string; ready: boolean; status: string }>;
+          }>('/api/broadcast/utility-status').catch(() => null);
+          if (refreshed) {
+            util = new Map(refreshed.pages.map((p) => [p.page_id, p]));
+            rows = rows.map((p) => ({
+              ...p,
+              utilityReady: util.get(p.pageId)?.ready,
+              utilityStatus: util.get(p.pageId)?.status,
+            }));
+            setPages(rows);
+          }
         }
       })
       .finally(() => setLoading(false));
@@ -178,9 +202,27 @@ export default function NewCampaignPage() {
 
   const canSend = selected.length > 0 && hasLiveToken && compliance && hasMessage;
 
-  const missingUtility =
-    selected.length > 0 &&
-    selected.some((id) => !pages.find((p) => p.pageId === id)?.utilityReady);
+  const pagesNeedingUtility = useMemo(
+    () =>
+      selected
+        .map((id) => pages.find((p) => p.pageId === id))
+        .filter((p): p is PageRow => {
+          if (!p) return false;
+          return p.hasPageToken !== false && !p.utilityReady;
+        }),
+    [pages, selected]
+  );
+
+  const missingUtility = pagesNeedingUtility.length > 0 && !utilityHintDismissed;
+
+  function dismissUtilityHint() {
+    setUtilityHintDismissed(true);
+    try {
+      sessionStorage.setItem('pb_utility_hint_dismissed', '1');
+    } catch {
+      /* ignore */
+    }
+  }
 
   function openLibrary() {
     librarySnapshotRef.current = {
@@ -592,12 +634,25 @@ export default function NewCampaignPage() {
       ) : null}
 
       {missingUtility ? (
-        <div className="mb-4 rounded-2xl border border-amber-200/80 bg-amber-50/80 px-4 py-3 text-sm text-amber-950">
-          Some pages still need Utility Messaging for older leads.{' '}
-          <Link href="/reconnect" className="font-semibold underline">
-            Reconnect once
-          </Link>{' '}
-          and allow Utility Messaging — or continue; in-window chats still send.
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+          <p>
+            <span className="font-medium text-slate-900">
+              {pagesNeedingUtility.length} selected page
+              {pagesNeedingUtility.length === 1 ? '' : 's'}
+            </span>{' '}
+            may need Utility Messaging for older leads. In-window chats still send — or{' '}
+            <Link href="/reconnect" className="font-semibold text-primary underline">
+              reconnect once
+            </Link>{' '}
+            to enable Utility.
+          </p>
+          <button
+            type="button"
+            className="shrink-0 text-xs font-medium text-slate-500 hover:text-slate-800"
+            onClick={dismissUtilityHint}
+          >
+            Dismiss
+          </button>
         </div>
       ) : null}
 
@@ -647,9 +702,12 @@ export default function NewCampaignPage() {
               />
             ) : null}
 
-            <div className="mt-3 max-h-64 space-y-1.5 overflow-y-auto pr-1">
+            <div className="mt-3 max-h-72 space-y-1.5 overflow-y-auto pr-1">
               {filteredPages.map((p) => {
                 const checked = selected.includes(p.pageId);
+                const avatar =
+                  p.profileImage ||
+                  `https://ui-avatars.com/api/?name=${encodeURIComponent(p.name)}&background=E2E8F0&color=0F172A`;
                 return (
                   <label
                     key={p.pageId}
@@ -668,6 +726,12 @@ export default function NewCampaignPage() {
                         );
                       }}
                     />
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={avatar}
+                      alt=""
+                      className="h-9 w-9 shrink-0 rounded-full object-cover ring-1 ring-slate-200"
+                    />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium text-slate-900">
                         {p.name}
@@ -675,6 +739,9 @@ export default function NewCampaignPage() {
                       <span className="text-xs text-slate-500">
                         {(p.contactCount || 0).toLocaleString()} reachable
                         {p.hasPageToken === false ? ' · needs reconnect' : ''}
+                        {checked && p.hasPageToken !== false && !p.utilityReady
+                          ? ' · utility pending'
+                          : ''}
                       </span>
                     </span>
                   </label>
@@ -684,6 +751,11 @@ export default function NewCampaignPage() {
                 <p className="px-2 py-6 text-center text-sm text-slate-500">No pages match.</p>
               ) : null}
             </div>
+            {!selected.length && pages.length ? (
+              <p className="mt-3 text-xs text-slate-500">
+                Select the pages you want to send from — nothing is pre-selected.
+              </p>
+            ) : null}
           </section>
 
           {/* Message */}

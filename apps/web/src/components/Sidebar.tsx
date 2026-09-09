@@ -36,19 +36,16 @@ const nav = [
 
 export function Sidebar({
   pages,
-  activePageId,
-  onSelectPage,
   userName,
   isAdmin,
   open,
   onClose,
   messagesRemaining,
-  messagesLimit,
   planExpired,
 }: {
   pages: PageItem[];
   activePageId?: string;
-  onSelectPage: (id: string) => void;
+  onSelectPage?: (id: string) => void;
   userName: string;
   isAdmin?: boolean;
   open?: boolean;
@@ -59,9 +56,9 @@ export function Sidebar({
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  const active = pages.find((p) => p.pageId === activePageId) || pages[0];
   const remaining = messagesRemaining ?? 0;
   const lowCredits = planExpired || remaining < 100;
+  const readyPages = pages.filter((p) => p.hasPageToken !== false).length;
 
   async function logout() {
     onClose?.();
@@ -94,7 +91,7 @@ export function Sidebar({
         )}
         aria-label="Main navigation"
       >
-        <div className="flex items-center gap-3 border-b border-slate-100 px-5 py-5">
+        <div className="flex items-center gap-3 border-b border-slate-100 px-5 py-4">
           <BrandLogo size={40} className="h-10 w-10 shrink-0" />
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold tracking-tight text-dark">
@@ -104,65 +101,47 @@ export function Sidebar({
           </div>
         </div>
 
-        <div className="border-b border-slate-100 px-4 py-4">
-          <p className="section-label">Active Page</p>
-          {active ? (
-            <div className="mt-2 rounded-xl border border-slate-100 bg-slate-50/80 p-2">
-              <div className="flex items-center gap-3 px-1 py-1">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={
-                    active.profileImage ||
-                    `https://ui-avatars.com/api/?name=${encodeURIComponent(active.name)}`
-                  }
-                  alt=""
-                  className="h-9 w-9 rounded-full object-cover ring-2 ring-white"
-                />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-slate-900">{active.name}</p>
-                  <p
-                    className={cn(
-                      'flex items-center gap-1.5 text-xs',
-                      active.hasPageToken === false || /error|expired|reauth/i.test(active.status)
-                        ? 'text-amber-700'
-                        : 'text-emerald-700'
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        'h-1.5 w-1.5 rounded-full',
-                        active.hasPageToken === false ? 'bg-amber-500' : 'bg-emerald-500'
-                      )}
-                    />
-                    {active.hasPageToken === false ? 'Needs reconnect' : 'Ready'}
-                  </p>
-                </div>
-              </div>
-              {pages.length > 1 ? (
-                <label className="mt-2 block">
-                  <span className="sr-only">Switch page</span>
-                  <select
-                    className="input py-1.5 text-xs"
-                    value={active.pageId}
-                    onChange={(e) => onSelectPage(e.target.value)}
-                  >
-                    {pages.map((p) => (
-                      <option key={p.pageId} value={p.pageId}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ) : null}
+        {/* Workspace snapshot — replaces Active Page picker */}
+        <div className="border-b border-slate-100 px-4 py-3">
+          <p className="section-label">Workspace</p>
+          <div className="mt-2 rounded-xl bg-slate-50 px-3 py-2.5">
+            <div className="flex items-baseline justify-between gap-2">
+              <p className="text-sm font-semibold tabular-nums text-slate-900">
+                {readyPages}
+                <span className="font-normal text-slate-400">
+                  {pages.length > readyPages ? ` / ${pages.length}` : ''}
+                </span>
+              </p>
+              <p className="text-[11px] font-medium text-slate-500">
+                page{readyPages === 1 ? '' : 's'} connected
+              </p>
             </div>
-          ) : (
-            <Link href="/connect" className="mt-2 block text-sm font-medium text-primary">
-              Connect a Page
-            </Link>
-          )}
+            <div className="mt-2 flex items-center justify-between gap-2 border-t border-slate-200/70 pt-2">
+              <p className="text-[11px] text-slate-500">
+                {planExpired ? 'Plan expired' : 'Credits left'}
+              </p>
+              <p
+                className={cn(
+                  'text-xs font-semibold tabular-nums',
+                  lowCredits ? 'text-amber-700' : 'text-slate-800'
+                )}
+              >
+                {planExpired ? 'Renew' : remaining.toLocaleString()}
+              </p>
+            </div>
+            {!pages.length ? (
+              <Link
+                href="/connect"
+                onClick={onClose}
+                className="mt-2 block text-xs font-semibold text-primary"
+              >
+                Connect a Page →
+              </Link>
+            ) : null}
+          </div>
         </div>
 
-        <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-3">
+        <nav className="space-y-0.5 overflow-y-auto px-3 py-3">
           {nav.map((item) => {
             const Icon = item.icon;
             const activeNav =
@@ -211,32 +190,38 @@ export function Sidebar({
           ) : null}
         </nav>
 
-        <div className="space-y-2 border-t border-slate-100 px-4 py-4">
-          <Link
-            href="/reconnect"
-            onClick={onClose}
-            className="block text-xs font-medium text-slate-500 hover:text-primary"
-          >
-            Reconnect Facebook
-          </Link>
-          <Link
-            href="/support"
-            onClick={onClose}
-            className="block text-xs font-medium text-slate-500 hover:text-primary"
-          >
-            Support
-          </Link>
-          <div className="pt-2">
-            <p className="truncate text-sm font-medium text-slate-900">{userName}</p>
-            <p className="text-xs text-slate-400">Workspace</p>
+        {/* Account + logout sit directly under nav (not pushed to screen bottom) */}
+        <div className="space-y-2 border-t border-slate-100 px-4 py-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium text-slate-900">{userName}</p>
+              <p className="text-[11px] text-slate-400">Signed in</p>
+            </div>
             <button
               type="button"
               onClick={() => void logout()}
-              className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+              title={messages.actions.logout}
             >
-              <LogOut className="h-4 w-4" aria-hidden />
+              <LogOut className="h-3.5 w-3.5" aria-hidden />
               {messages.actions.logout}
             </button>
+          </div>
+          <div className="flex flex-wrap gap-x-3 gap-y-1">
+            <Link
+              href="/reconnect"
+              onClick={onClose}
+              className="text-[11px] font-medium text-slate-500 hover:text-primary"
+            >
+              Reconnect
+            </Link>
+            <Link
+              href="/support"
+              onClick={onClose}
+              className="text-[11px] font-medium text-slate-500 hover:text-primary"
+            >
+              Support
+            </Link>
           </div>
         </div>
       </aside>

@@ -118,8 +118,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-screen bg-surface">
       <Sidebar
         pages={me.pages}
-        activePageId={activePageId}
-        onSelectPage={selectPage}
         userName={me.user.name}
         isAdmin={me.user.role === 'ADMIN'}
         open={menuOpen}
