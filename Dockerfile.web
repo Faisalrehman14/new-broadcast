@@ -1,5 +1,4 @@
-# CastMe Pro — api + worker image (no Next.js).
-# Web uses Dockerfile.web. Do not delete Dockerfile.web while web sets RAILWAY_DOCKERFILE_PATH=Dockerfile.web.
+# CastMe Pro — Next.js web image (Railway web service: RAILWAY_DOCKERFILE_PATH=Dockerfile.web)
 FROM node:20-bookworm-slim AS base
 WORKDIR /app
 RUN apt-get update && apt-get install -y openssl ca-certificates && rm -rf /var/lib/apt/lists/*
@@ -17,22 +16,18 @@ COPY packages/meta-provider/package.json packages/meta-provider/
 RUN npm ci --ignore-scripts --include=dev
 
 FROM deps AS build
+# Critical: NODE_ENV=development during next build mixes prod/dev → useContext null.
 ENV NODE_ENV=production
 COPY . .
 RUN npm run build -w @pagebroadcast/types \
  && npm run build -w @pagebroadcast/config \
  && npm run build -w @pagebroadcast/validation \
  && npm run build -w @pagebroadcast/meta-provider \
- && npx prisma generate --schema apps/api/prisma/schema.prisma \
- && npm run build -w @pagebroadcast/api \
- && npm run build -w @pagebroadcast/worker \
- && test -f apps/api/dist/server.js \
- && test -f apps/worker/dist/index.js \
- && ls -la apps/api/dist/server.js apps/worker/dist/index.js
+ && npm run build -w @pagebroadcast/web
 
 FROM base AS production
 COPY --from=build /app /app
 WORKDIR /app
 ENV NODE_ENV=production
-EXPOSE 4000
-CMD ["npm", "run", "start", "--workspace=@pagebroadcast/api"]
+EXPOSE 3000
+CMD ["npm", "run", "start", "--workspace=@pagebroadcast/web"]

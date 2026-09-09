@@ -36,6 +36,7 @@ export const messages = {
     waitingApproval: 'Activating…',
     startBroadcast: 'Start Broadcast',
     fixResubmit: 'Activate again',
+    logout: 'Log out',
   },
 } as const;
 

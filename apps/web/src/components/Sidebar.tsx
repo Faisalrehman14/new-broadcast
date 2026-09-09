@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import {
   Activity,
   BarChart3,
@@ -9,7 +9,7 @@ import {
   CreditCard,
   HelpCircle,
   LayoutDashboard,
-  Link2,
+  LogOut,
   Megaphone,
   RefreshCw,
   Settings,
@@ -18,6 +18,7 @@ import {
   UsersRound,
 } from 'lucide-react';
 import { messages } from '@/i18n/en';
+import { api, setCsrfToken } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { BrandLogo } from './BrandLogo';
 
@@ -69,11 +70,29 @@ export function Sidebar({
   planExpired?: boolean;
 }) {
   const pathname = usePathname();
+  const router = useRouter();
   const active = pages.find((p) => p.pageId === activePageId) || pages[0];
   const remaining = messagesRemaining ?? 0;
   const limit = messagesLimit ?? 0;
   const lowCredits =
     planExpired || remaining < 100 || (limit > 0 && remaining / limit < 0.1);
+
+  async function logout() {
+    onClose?.();
+    try {
+      await api('/api/auth/logout', { method: 'POST' });
+    } catch {
+      /* still leave the session UI */
+    }
+    setCsrfToken(null);
+    try {
+      sessionStorage.removeItem('pb_csrf');
+      sessionStorage.removeItem('pb_active_page');
+    } catch {
+      /* ignore */
+    }
+    router.replace('/login');
+  }
 
   return (
     <>
@@ -205,6 +224,14 @@ export function Sidebar({
         <div className="border-t border-slate-100 px-4 py-4">
           <p className="truncate text-sm font-medium">{userName}</p>
           <p className="text-xs text-slate-400">Workspace owner</p>
+          <button
+            type="button"
+            onClick={() => void logout()}
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          >
+            <LogOut className="h-4 w-4" aria-hidden />
+            {messages.actions.logout}
+          </button>
         </div>
       </aside>
     </>
