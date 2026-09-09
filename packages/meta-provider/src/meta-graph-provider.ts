@@ -601,31 +601,42 @@ export class MetaGraphProvider implements MetaProvider {
     pageAccessToken: string;
     name?: string;
   }): Promise<MetaUtilityTemplateSummary[]> {
-    const qs = new URLSearchParams({
-      access_token: params.pageAccessToken,
-      fields: 'name,status,language,category,id',
-    });
-    if (params.name) qs.set('name', params.name);
-    const res = await fetch(`${this.base()}/${params.pageId}/message_templates?${qs}`);
-    if (!res.ok) {
-      return [];
+    const out: MetaUtilityTemplateSummary[] = [];
+    let after: string | undefined;
+    // Name-filtered lookups are usually one page; full sync may need cursors.
+    for (let page = 0; page < 20; page++) {
+      const qs = new URLSearchParams({
+        access_token: params.pageAccessToken,
+        fields: 'name,status,language,category,id',
+        limit: params.name ? '25' : '100',
+      });
+      if (params.name) qs.set('name', params.name);
+      if (after) qs.set('after', after);
+      const res = await fetch(`${this.base()}/${params.pageId}/message_templates?${qs}`);
+      if (!res.ok) break;
+      const data = (await res.json()) as {
+        data?: Array<{
+          id?: string;
+          name: string;
+          status?: string;
+          language?: string;
+          category?: string;
+        }>;
+        paging?: { cursors?: { after?: string }; next?: string };
+      };
+      for (const t of data.data ?? []) {
+        out.push({
+          id: t.id,
+          name: t.name,
+          status: mapStatus((t.status ?? 'UNKNOWN').toUpperCase()),
+          language: t.language || 'en_US',
+          category: t.category,
+        });
+      }
+      after = data.paging?.cursors?.after;
+      if (!after || !data.paging?.next || params.name) break;
     }
-    const data = (await res.json()) as {
-      data?: Array<{
-        id?: string;
-        name: string;
-        status?: string;
-        language?: string;
-        category?: string;
-      }>;
-    };
-    return (data.data ?? []).map((t) => ({
-      id: t.id,
-      name: t.name,
-      status: mapStatus((t.status ?? 'UNKNOWN').toUpperCase()),
-      language: t.language || 'en_US',
-      category: t.category,
-    }));
+    return out;
   }
 
   async getTemplateStatus(params: {

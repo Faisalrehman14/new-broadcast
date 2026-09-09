@@ -170,6 +170,7 @@ export default function NewCampaignPage() {
   }
 
   function selectLibraryItem(tpl: StarterTemplate) {
+    if (busy) return;
     setEditing(tpl);
     if (tpl.id === 'custom') {
       setSlots([message || tpl.examples[0] || '']);
@@ -179,44 +180,89 @@ export default function NewCampaignPage() {
       setSlots(defaultSlots(tpl));
       setLibraryApproved(false);
       setApprovedPageCount(0);
+      // Page Instant: clicking a card starts Meta sync/ensure immediately
+      if (selected.length) {
+        void approveLibraryTemplateFor(tpl);
+      }
     }
   }
 
-  /** Competitor-style: submit Meta UTILITY + poll until APPROVED (or ~1 min). */
+  /** Competitor-style: sync Meta templates → warm reuse or cold create+wait. */
   async function ensureUtilityApproved(tpl: StarterTemplate): Promise<{
     ready: number;
     pending: number;
+    error?: string;
+    message?: string;
+    path?: string;
   }> {
     if (!selected.length) return { ready: 0, pending: 0 };
 
     const usePlain = Boolean(tpl.instant) || tpl.name === 'castme_plain_utility_v1';
-    if (usePlain) {
-      await api('/api/broadcast/prepare-instant', {
-        method: 'POST',
-        body: JSON.stringify({ page_ids: selected }),
-      }).catch(() => undefined);
-    } else {
-      for (const pageId of selected.slice(0, 8)) {
-        await api('/api/broadcast/prepare-outside24h', {
-          method: 'POST',
-          body: JSON.stringify({
-            page_id: pageId,
-            template_name: tpl.name,
-            body: tpl.body,
-            language: 'en',
-            example_values: tpl.examples.length ? tpl.examples : tpl.parameters,
-          }),
-        }).catch(() => undefined);
-      }
+    const metaBody = usePlain ? '{{1}}' : tpl.body;
+    const metaName = usePlain ? 'castme_plain_utility_v1' : tpl.name;
+
+    setApproveWait(
+      usePlain
+        ? 'Checking Instant UTILITY on Meta — please wait up to 1 minute…'
+        : 'If this template has never been used on your page, approval usually takes 30–60 seconds. Please keep this window open…'
+    );
+
+    const prep = await api<{
+      results: Array<{ page_id: string; status: string; error?: string; path?: string; name?: string }>;
+      approved?: number;
+      pending?: number;
+      failed?: number;
+      message?: string;
+      template_name?: string;
+    }>('/api/broadcast/ensure-library', {
+      method: 'POST',
+      body: JSON.stringify({
+        page_ids: selected,
+        template_name: metaName,
+        body: metaBody,
+        language: 'en',
+        example_values: tpl.examples.length ? tpl.examples : tpl.parameters,
+        instant: usePlain,
+      }),
+    });
+
+    let ready = prep.results.filter((r) => r.status === 'APPROVED').length;
+    const errHit = prep.results.find((r) => r.status === 'error' || r.status === 'REJECTED');
+    const cold = prep.results.some((r) => r.path === 'cold');
+    if (cold && ready < selected.length) {
+      setApproveWait('Waiting for Meta approval… please keep this window open.');
     }
 
-    const deadline = Date.now() + 60_000;
-    let ready = 0;
-    let pending = selected.length;
-    while (Date.now() < deadline) {
+    setApprovedPageCount(ready);
+    setPages((prev) =>
+      prev.map((p) => {
+        const hit = prep.results.find((x) => x.page_id === p.pageId);
+        if (!hit) return p;
+        return {
+          ...p,
+          utilityReady: hit.status === 'APPROVED',
+          utilityStatus: hit.status,
+        };
+      })
+    );
+
+    if (ready >= selected.length) {
+      return {
+        ready,
+        pending: 0,
+        message: prep.message,
+        path: cold ? 'cold' : 'warm',
+      };
+    }
+
+    // Short backup poll (ensure-library already waited; catch worker/DB lag)
+    const statusPath = `/api/broadcast/utility-status?template_name=${encodeURIComponent(metaName)}`;
+    const deadline = Date.now() + 30_000;
+    let pending = Math.max(0, selected.length - ready);
+    while (Date.now() < deadline && ready < selected.length) {
       const status = await api<{
         pages: Array<{ page_id: string; ready: boolean; status: string }>;
-      }>('/api/broadcast/utility-status').catch(() => null);
+      }>(statusPath).catch(() => null);
       if (status) {
         const hits = status.pages.filter((x) => selected.includes(x.page_id));
         ready = hits.filter((x) => x.ready || x.status === 'APPROVED' || x.status === 'approved').length;
@@ -232,12 +278,18 @@ export default function NewCampaignPage() {
       }
       await new Promise((r) => setTimeout(r, 2500));
     }
-    return { ready, pending };
+
+    return {
+      ready,
+      pending,
+      error: errHit?.error,
+      message: prep.message,
+      path: cold ? 'cold' : 'warm',
+    };
   }
 
-  /** Step A: approve on Meta — unlocks variable editing (like Page Instant). */
-  async function approveLibraryTemplate() {
-    if (!editing || editing.id === 'custom') {
+  async function approveLibraryTemplateFor(tpl: StarterTemplate) {
+    if (tpl.id === 'custom') {
       setLibraryApproved(true);
       return;
     }
@@ -247,29 +299,39 @@ export default function NewCampaignPage() {
     }
     setBusy(true);
     setError('');
-    setApproveWait('Approving template on Meta — please wait up to 1 minute…');
+    setApproveWait('Checking template approval on this page…');
     try {
-      const { ready, pending } = await ensureUtilityApproved(editing);
+      const { ready, pending, error: prepError, message } = await ensureUtilityApproved(tpl);
       setApprovedPageCount(ready);
       if (ready > 0) {
         setLibraryApproved(true);
         setToast(
-          pending === 0
-            ? `Approved on ${ready} of ${selected.length} page${selected.length === 1 ? '' : 's'}.`
-            : `Approved on ${ready} of ${selected.length} pages — ${pending} still pending.`
+          message ||
+            (pending === 0
+              ? `Approved on ${ready} of ${selected.length} page${selected.length === 1 ? '' : 's'}.`
+              : `Approved on ${ready} of ${selected.length} pages — ${pending} still pending.`)
         );
       } else {
         setLibraryApproved(false);
         setError(
-          'Meta has not approved UTILITY yet. Reconnect Facebook, grant Utility Messaging, then try again.'
+          prepError
+            ? `Meta approve failed: ${prepError}`
+            : 'Meta has not approved UTILITY yet. Reconnect Facebook, grant Utility Messaging, then try again.'
         );
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Template approval failed');
+      setLibraryApproved(false);
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setApproveWait(null);
       setBusy(false);
     }
+  }
+
+  /** Step A: approve on Meta — unlocks variable editing (like Page Instant). */
+  async function approveLibraryTemplate() {
+    if (!editing) return;
+    await approveLibraryTemplateFor(editing);
   }
 
   /** Step B: after approve — save filled variables and continue. */
@@ -822,9 +884,10 @@ export default function NewCampaignPage() {
           <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
             <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
               <div>
-                <h3 className="font-semibold">Starter templates</h3>
+                <h3 className="font-semibold">Choose from Library</h3>
                 <p className="text-sm text-slate-500">
-                  Choose a template → approve on your Pages → then fill variables.
+                  Preview a template and pick one. If it&apos;s never been used on this page, we&apos;ll
+                  submit it to Meta and wait here for approval.
                 </p>
               </div>
               <button type="button" className="btn-secondary" onClick={() => setLibraryOpen(false)}>
@@ -859,16 +922,18 @@ export default function NewCampaignPage() {
                     <button
                       key={tpl.id + tpl.name}
                       type="button"
+                      disabled={busy}
                       className={`w-full rounded-lg px-3 py-2 text-left text-sm transition ${
                         editing.id === tpl.id
                           ? 'bg-blue-50 text-primary ring-1 ring-primary/30'
                           : 'hover:bg-slate-50'
-                      }`}
+                      } ${busy ? 'opacity-60' : ''}`}
                       onClick={() => selectLibraryItem(tpl)}
                     >
                       <span className="block font-medium">{tpl.title}</span>
                       <span className="text-xs text-slate-500">
                         {tpl.badge} · {tpl.description || tpl.name}
+                        {busy && editing.id === tpl.id ? ' · Working on this one…' : ''}
                       </span>
                     </button>
                   ))}
@@ -890,9 +955,13 @@ export default function NewCampaignPage() {
                           Approved on {approvedPageCount || selected.length} of {selected.length} page
                           {selected.length === 1 ? '' : 's'}.
                         </p>
+                      ) : busy ? (
+                        <p className="mt-2 text-sm text-amber-800">
+                          Checking template approval on this page…
+                        </p>
                       ) : (
                         <p className="mt-2 text-sm text-amber-800">
-                          Approve on your selected Pages first — then you can edit variables.
+                          Click a template to sync Meta and unlock variables (usually 30–60 seconds).
                         </p>
                       )
                     ) : null}
