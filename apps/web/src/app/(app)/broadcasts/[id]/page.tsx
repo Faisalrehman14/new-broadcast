@@ -36,6 +36,14 @@ type Campaign = {
   }>;
 };
 
+function phaseHint(phase: string, active?: boolean) {
+  if (!active) return '';
+  if (phase === 'setting_up_templates') return 'Preparing templates…';
+  if (phase === 'syncing_leads') return 'Syncing audience…';
+  if (phase === 'sending') return 'Delivering…';
+  return 'Working…';
+}
+
 export default function CampaignDetailPage() {
   const params = useParams<{ id: string }>();
   const [campaign, setCampaign] = useState<Campaign | null>(null);
@@ -48,7 +56,7 @@ export default function CampaignDetailPage() {
   const load = useCallback(async () => {
     const [c, f] = await Promise.all([
       api<{ campaign: Campaign }>(`/api/broadcast/campaigns/${params.id}`),
-      api<{ data: typeof failures }>(`/api/broadcast/campaigns/${params.id}/failures?pageSize=30`),
+      api<{ data: typeof failures }>(`/api/broadcast/campaigns/${params.id}/failures?pageSize=20`),
     ]);
     setCampaign(c.campaign);
     setFailures(f.data);
@@ -58,17 +66,17 @@ export default function CampaignDetailPage() {
     load().catch((err) => setError(err instanceof Error ? err.message : 'Failed to load'));
     const t = setInterval(() => {
       load().catch(() => undefined);
-    }, campaign?.active ? 1500 : 4000);
+    }, campaign?.active ? 1500 : 5000);
     return () => clearInterval(t);
   }, [load, campaign?.active]);
 
-  if (!campaign && !error) return <LoadingState label="Loading campaign..." />;
+  if (!campaign && !error) return <LoadingState label="Loading campaign…" />;
   if (!campaign) {
     return (
       <div className="space-y-4">
         <p className="text-sm text-danger">{error}</p>
         <Link href="/broadcasts" className="btn-secondary">
-          Back
+          Back to broadcasts
         </Link>
       </div>
     );
@@ -90,40 +98,36 @@ export default function CampaignDetailPage() {
     }
   }
 
-  const processed =
-    campaign.sentCount + campaign.failedCount + campaign.skippedCount;
-  const percent =
-    campaign.estimatedRecipients > 0
-      ? Math.min(100, Math.round((processed / campaign.estimatedRecipients) * 100))
-      : 0;
-  const successPercent =
-    campaign.estimatedRecipients > 0
-      ? Math.min(100, Math.round((campaign.sentCount / campaign.estimatedRecipients) * 100))
-      : 0;
+  const processed = campaign.sentCount + campaign.failedCount + campaign.skippedCount;
+  const total = Math.max(campaign.estimatedRecipients, 1);
+  const deliveredPct = Math.min(100, Math.round((campaign.sentCount / total) * 100));
+  const processedPct = Math.min(100, Math.round((processed / total) * 100));
+  const title =
+    (campaign.message || '').trim().slice(0, 72) || `Campaign ${campaign.id.slice(0, 8)}`;
+  const hint = phaseHint(campaign.phase, campaign.active);
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="text-xs text-slate-400">
-            <Link href="/broadcasts" className="hover:underline">
-              Broadcasts
-            </Link>{' '}
-            / {campaign.id.slice(0, 8)}…
-          </p>
-          <h1 className="mt-1 text-2xl font-semibold">Campaign</h1>
+    <div className="mx-auto max-w-5xl space-y-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <Link href="/broadcasts" className="text-xs font-medium text-slate-400 hover:text-primary">
+            ← Broadcasts
+          </Link>
+          <h1 className="page-title mt-1 break-words">{title}{title.length >= 72 ? '…' : ''}</h1>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <StatusBadge status={campaign.phase.toUpperCase()} />
             {campaign.active ? (
               <span className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-700">
-                <span className="h-2 w-2 animate-pulse rounded-full bg-blue-600" />
-                Live · ETA ~{campaign.etaSeconds ?? 0}s
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-600" />
+                Live{campaign.etaSeconds ? ` · ~${campaign.etaSeconds}s left` : ''}
               </span>
             ) : null}
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          {['queued', 'setting_up_templates', 'syncing_leads', 'sending'].includes(campaign.phase) ? (
+          {['queued', 'setting_up_templates', 'syncing_leads', 'sending'].includes(
+            campaign.phase
+          ) ? (
             <button className="btn-secondary" disabled={busy} onClick={() => action('pause')}>
               Pause
             </button>
@@ -147,144 +151,116 @@ export default function CampaignDetailPage() {
       </div>
 
       <div
-        className={`rounded-xl border px-4 py-3 text-sm font-medium ${
+        className={`rounded-2xl border px-4 py-3 text-sm ${
           campaign.active
-            ? 'border-blue-200 bg-blue-50 text-blue-900'
+            ? 'border-blue-200 bg-blue-50 text-blue-950'
             : campaign.phase === 'failed'
               ? 'border-red-200 bg-red-50 text-red-900'
-              : 'border-slate-200 bg-slate-50 text-slate-800'
+              : 'border-slate-200 bg-white text-slate-800'
         }`}
       >
-        {campaign.phaseMessage || campaign.phase}
-        {campaign.active
-          ? campaign.phase === 'setting_up_templates'
-            ? ' · Preparing templates…'
-            : campaign.phase === 'syncing_leads'
-              ? ' · Syncing audience…'
-              : ' · Delivering…'
-          : ''}
+        <p className="font-medium">{campaign.phaseMessage || campaign.phase}</p>
+        {hint ? <p className="mt-0.5 text-xs opacity-80">{hint}</p> : null}
       </div>
       {error ? <p className="text-sm text-danger">{error}</p> : null}
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        <Stat label="Total" value={campaign.estimatedRecipients} />
-        <Stat label="Sent" value={campaign.sentCount} tone="success" />
+      <div className="grid gap-3 sm:grid-cols-4">
+        <Stat label="Delivered" value={campaign.sentCount} tone="success" />
         <Stat label="Failed" value={campaign.failedCount} tone="danger" />
         <Stat label="Skipped" value={campaign.skippedCount} />
         <Stat label="Queued" value={campaign.queuedCount} tone="info" />
       </div>
 
-      <div className="card p-5">
-        <div className="flex justify-between text-sm">
-          <span className="font-semibold">Progress</span>
-          <span className="text-slate-500">
-            {processed.toLocaleString()} / {campaign.estimatedRecipients.toLocaleString()} processed
-            · {successPercent}% delivered
-          </span>
+      <section className="card p-5">
+        <div className="flex flex-wrap items-end justify-between gap-2">
+          <div>
+            <h2 className="font-semibold text-slate-900">Delivery</h2>
+            <p className="text-sm text-slate-500">
+              {campaign.sentCount.toLocaleString()} of {campaign.estimatedRecipients.toLocaleString()}{' '}
+              delivered ({deliveredPct}%)
+            </p>
+          </div>
+          <p className="text-xs text-slate-400">{processedPct}% processed</p>
         </div>
-        <div className="mt-3 h-3 overflow-hidden rounded-full bg-slate-100">
+        <div className="relative mt-4 h-3 overflow-hidden rounded-full bg-slate-100">
           <div
-            className="h-full bg-emerald-500 transition-all"
-            style={{ width: `${successPercent}%` }}
-            title="Successfully delivered"
+            className="absolute inset-y-0 left-0 bg-slate-300/80 transition-all"
+            style={{ width: `${processedPct}%` }}
+          />
+          <div
+            className="absolute inset-y-0 left-0 bg-emerald-500 transition-all"
+            style={{ width: `${deliveredPct}%` }}
           />
         </div>
-        <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
-          <div
-            className="h-full bg-slate-400 transition-all"
-            style={{ width: `${percent}%` }}
-            title="Processed (sent + failed + skipped)"
-          />
-        </div>
-        <p className="mt-3 text-xs text-slate-500">
-          Green = delivered · Grey = processed (includes failed/skipped)
-        </p>
-        <p className="mt-3 text-xs text-slate-500">
-          Speed {campaign.speedPreset} · {campaign.delayMs}ms delay · quota est.{' '}
-          {campaign.estimatedQuota}
-        </p>
         {campaign.message ? (
-          <pre className="mt-4 whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-sm">
+          <pre className="mt-4 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-xl bg-slate-50 p-3 text-sm text-slate-700">
             {campaign.message}
           </pre>
         ) : null}
-      </div>
+      </section>
 
-      <div className="card overflow-hidden">
-        <div className="border-b border-slate-100 px-5 py-4 font-semibold">Pages</div>
-        <table className="min-w-full text-left text-sm">
-          <thead className="bg-slate-50 text-xs uppercase text-slate-500">
-            <tr>
-              <th className="px-5 py-3">Page</th>
-              <th className="px-5 py-3">Status</th>
-              <th className="px-5 py-3">Template</th>
-              <th className="px-5 py-3">Recipients</th>
-              <th className="px-5 py-3">Sent</th>
-              <th className="px-5 py-3">Failed</th>
-            </tr>
-          </thead>
-          <tbody>
-            {campaign.pages.map((p) => (
-              <tr key={p.id} className="border-t border-slate-100">
-                <td className="px-5 py-3">{p.pageName}</td>
-                <td className="px-5 py-3">
-                  <StatusBadge status={p.status.toUpperCase()} />
+      <section className="card overflow-hidden">
+        <div className="border-b border-slate-100 px-5 py-3.5 font-semibold text-slate-900">
+          Pages
+        </div>
+        <div className="divide-y divide-slate-100">
+          {campaign.pages.map((p) => {
+            const blocked = /Utility Messaging|picker|outside 24h/i.test(p.lastError || '');
+            return (
+              <div key={p.id} className="flex flex-wrap items-start justify-between gap-3 px-5 py-3.5">
+                <div className="min-w-0">
+                  <p className="font-medium text-slate-900">{p.pageName}</p>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    {p.templateReady ? 'Template ready' : blocked ? 'Utility blocked' : 'Pending'} ·{' '}
+                    {p.recipientCount.toLocaleString()} leads
+                  </p>
                   {p.lastError ? (
-                    <p className="mt-1 max-w-xs text-xs text-slate-500">{p.lastError}</p>
+                    <p className="mt-1 max-w-xl text-xs text-slate-500">{p.lastError}</p>
                   ) : null}
-                </td>
-                <td className="px-5 py-3">
-                  {p.templateReady
-                    ? 'Ready'
-                    : /Utility Messaging|picker|outside 24h/i.test(p.lastError || '')
-                      ? 'Blocked'
-                      : 'Pending'}
-                </td>
-                <td className="px-5 py-3 tabular-nums">{p.recipientCount}</td>
-                <td className="px-5 py-3 tabular-nums text-emerald-700">{p.sentCount}</td>
-                <td className="px-5 py-3 tabular-nums text-red-700">{p.failedCount}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+                </div>
+                <div className="text-right text-sm">
+                  <p className="tabular-nums text-emerald-700">{p.sentCount} sent</p>
+                  {p.failedCount ? (
+                    <p className="tabular-nums text-red-600">{p.failedCount} failed</p>
+                  ) : null}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
 
-      <div className="card overflow-hidden">
-        <div className="border-b border-slate-100 px-5 py-4 font-semibold">Recent issues</div>
+      <section className="card overflow-hidden">
+        <div className="border-b border-slate-100 px-5 py-3.5 font-semibold text-slate-900">
+          Issues
+        </div>
         {failures.length === 0 ? (
-          <p className="px-5 py-6 text-sm text-slate-500">No issues recorded.</p>
+          <p className="px-5 py-8 text-sm text-slate-500">No issues recorded.</p>
         ) : (
-          <ul className="divide-y divide-slate-100 text-sm">
+          <ul className="divide-y divide-slate-100">
             {failures.map((f) => {
-              const soft =
-                f.code === 'recipient_unavailable' ||
-                f.code === 'recipient_invalid' ||
-                /unavailable|matching user/i.test(f.message);
               const utilityFix =
                 f.code === 'utility_window_rejected' ||
                 f.code === 'utility_permission_missing' ||
                 /Utility Messaging|outside 24h/i.test(f.message);
               return (
-                <li key={f.id} className="px-5 py-3">
-                  <span className={`font-medium ${soft ? 'text-amber-700' : 'text-red-700'}`}>
-                    {f.code}
-                  </span>
-                  <span className="text-slate-600"> — {f.message}</span>
-                  {f.psid ? <span className="block text-xs text-slate-400">PSID {f.psid}</span> : null}
+                <li key={f.id} className="px-5 py-3 text-sm">
+                  <p className="font-medium text-slate-900">{f.code.replace(/_/g, ' ')}</p>
+                  <p className="mt-0.5 text-slate-600">{f.message}</p>
                   {utilityFix ? (
-                    <a
+                    <Link
                       href="/reconnect"
-                      className="mt-1 inline-block text-xs font-semibold text-primary underline"
+                      className="mt-1 inline-block text-xs font-semibold text-primary hover:underline"
                     >
-                      Reconnect Facebook &amp; grant Utility Messaging for this Page
-                    </a>
+                      Fix with Reconnect → Utility Messaging
+                    </Link>
                   ) : null}
                 </li>
               );
             })}
           </ul>
         )}
-      </div>
+      </section>
     </div>
   );
 }
@@ -308,8 +284,8 @@ function Stat({
           : 'text-slate-900';
   return (
     <div className="card p-4">
-      <p className="text-xs uppercase tracking-wide text-slate-400">{label}</p>
-      <p className={`mt-1 text-3xl font-semibold tabular-nums ${cls}`}>{value}</p>
+      <p className="section-label">{label}</p>
+      <p className={`mt-1 text-2xl font-semibold tabular-nums ${cls}`}>{value.toLocaleString()}</p>
     </div>
   );
 }

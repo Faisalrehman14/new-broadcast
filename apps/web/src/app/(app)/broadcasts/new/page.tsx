@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { LoadingState } from '@/components/EmptyState';
@@ -34,33 +35,27 @@ function defaultSlots(tpl: StarterTemplate): string[] {
   });
 }
 
-function MessengerPreview({
-  pageName,
-  text,
-}: {
-  pageName: string;
-  text: string;
-}) {
+function MessengerPreview({ pageName, text }: { pageName: string; text: string }) {
   return (
     <aside className="lg:sticky lg:top-6">
-      <p className="mb-3 text-center text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-        Live Messenger Preview
-      </p>
-      <div className="mx-auto w-full max-w-[300px] rounded-[2rem] border-[10px] border-slate-900 bg-slate-900 shadow-xl">
-        <div className="overflow-hidden rounded-[1.35rem] bg-[#eef2f7]">
-          <div className="flex items-center gap-2 bg-[#0084ff] px-3 py-2.5 text-white">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-white/20 text-xs font-bold">
-              {(pageName || 'P').slice(0, 1).toUpperCase()}
+      <div className="card overflow-hidden p-4">
+        <p className="section-label mb-3 text-center">Preview</p>
+        <div className="mx-auto w-full max-w-[280px] rounded-[1.75rem] border-[9px] border-slate-900 bg-slate-900 shadow-lg">
+          <div className="overflow-hidden rounded-[1.2rem] bg-[#eef2f7]">
+            <div className="flex items-center gap-2 bg-[#0084ff] px-3 py-2.5 text-white">
+              <div className="flex h-7 w-7 items-center justify-center rounded-full bg-white/20 text-xs font-bold">
+                {(pageName || 'P').slice(0, 1).toUpperCase()}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold">{pageName || 'Your Page'}</p>
+                <p className="text-[10px] text-white/75">Messenger</p>
+              </div>
             </div>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold">{pageName || 'Your Page'}</p>
-              <p className="text-[10px] text-white/80">Messenger</p>
-            </div>
-          </div>
-          <div className="min-h-[280px] space-y-3 bg-[linear-gradient(180deg,#f4f7fb_0%,#e8eef6_100%)] p-3 pb-6 sm:min-h-[360px]">
-            <div className="flex justify-end">
-              <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-[#0084ff] px-3 py-2 text-[13px] leading-relaxed text-white shadow-sm">
-                {text.trim() || 'Your message will appear here…'}
+            <div className="min-h-[300px] bg-[linear-gradient(180deg,#f4f7fb_0%,#e8eef6_100%)] p-3 pb-5">
+              <div className="flex justify-end">
+                <div className="max-w-[88%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-[#0084ff] px-3 py-2 text-[13px] leading-relaxed text-white shadow-sm">
+                  {text.trim() || 'Your message preview…'}
+                </div>
               </div>
             </div>
           </div>
@@ -89,13 +84,14 @@ export default function NewCampaignPage() {
   const [imageUrl, setImageUrl] = useState('');
   const [speed, setSpeed] = useState<SpeedId>('balanced');
   const [compliance, setCompliance] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [busy, setBusy] = useState(false);
   const [approveWait, setApproveWait] = useState<string | null>(null);
   const [libraryApproved, setLibraryApproved] = useState(false);
   const [approvedPageCount, setApprovedPageCount] = useState(0);
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
-  const fillSectionRef = useRef<HTMLDivElement>(null);
+  const messageRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     Promise.all([
@@ -168,13 +164,16 @@ export default function NewCampaignPage() {
     return [...numbered, CUSTOM_STARTER, ...instant];
   }, [starters]);
 
-  const canSend =
-    selected.length > 0 &&
-    hasLiveToken &&
-    compliance &&
-    (mode === 'custom'
+  const hasMessage =
+    mode === 'custom'
       ? Boolean(message.trim() || imageUrl.trim())
-      : Boolean(applied && previewText.trim()));
+      : Boolean(applied && previewText.trim());
+
+  const canSend = selected.length > 0 && hasLiveToken && compliance && hasMessage;
+
+  const missingUtility =
+    selected.length > 0 &&
+    selected.some((id) => !pages.find((p) => p.pageId === id)?.utilityReady);
 
   function openLibrary() {
     const pick = editing || applied || starters.find((s) => !s.instant) || CUSTOM_STARTER;
@@ -227,8 +226,8 @@ export default function NewCampaignPage() {
 
     setApproveWait(
       usePlain
-        ? 'Checking Instant UTILITY on Meta — please wait up to 1 minute…'
-        : 'If this template has never been used on your page, approval usually takes 30–60 seconds. Please keep this window open…'
+        ? 'Preparing Instant send… usually under a minute.'
+        : 'Approving with Meta… usually 30–60 seconds. Keep this open.'
     );
 
     const prep = await api<{
@@ -239,11 +238,7 @@ export default function NewCampaignPage() {
         path?: string;
         name?: string;
       }>;
-      approved?: number;
-      pending?: number;
-      failed?: number;
       message?: string;
-      template_name?: string;
     }>('/api/broadcast/ensure-library', {
       method: 'POST',
       body: JSON.stringify({
@@ -260,7 +255,7 @@ export default function NewCampaignPage() {
     const errHit = prep.results.find((r) => r.status === 'error' || r.status === 'REJECTED');
     const cold = prep.results.some((r) => r.path === 'cold');
     if (cold && ready < selected.length) {
-      setApproveWait('Waiting for Meta approval… please keep this window open.');
+      setApproveWait('Waiting for Meta approval…');
     }
 
     setApprovedPageCount(ready);
@@ -277,12 +272,7 @@ export default function NewCampaignPage() {
     );
 
     if (ready >= selected.length) {
-      return {
-        ready,
-        pending: 0,
-        message: prep.message,
-        path: cold ? 'cold' : 'warm',
-      };
+      return { ready, pending: 0, message: prep.message, path: cold ? 'cold' : 'warm' };
     }
 
     const statusPath = `/api/broadcast/utility-status?template_name=${encodeURIComponent(metaName)}`;
@@ -325,12 +315,12 @@ export default function NewCampaignPage() {
       return;
     }
     if (!selected.length) {
-      setError('Select at least one Page before approving.');
+      setError('Select at least one Page first.');
       return;
     }
     setBusy(true);
     setError('');
-    setApproveWait('Checking template approval on this page…');
+    setApproveWait('Checking approval…');
     try {
       const { ready, pending, error: prepError, message } = await ensureUtilityApproved(tpl);
       setApprovedPageCount(ready);
@@ -339,15 +329,14 @@ export default function NewCampaignPage() {
         setToast(
           message ||
             (pending === 0
-              ? `Approved on ${ready} of ${selected.length} page${selected.length === 1 ? '' : 's'}.`
-              : `Approved on ${ready} of ${selected.length} pages — ${pending} still pending.`)
+              ? `Ready on ${ready} of ${selected.length} page${selected.length === 1 ? '' : 's'}.`
+              : `Ready on ${ready} of ${selected.length} — ${pending} still pending.`)
         );
       } else {
         setLibraryApproved(false);
         setError(
-          prepError
-            ? `Meta approve failed: ${prepError}`
-            : 'Meta has not approved UTILITY yet. Reconnect Facebook, grant Utility Messaging, then try again.'
+          prepError ||
+            'Meta has not approved this template yet. Reconnect Facebook and grant Utility Messaging.'
         );
       }
     } catch (err) {
@@ -364,7 +353,7 @@ export default function NewCampaignPage() {
     if (editing.id === 'custom') {
       const text = (slots[0] || '').trim();
       if (!text) {
-        setError('Write your custom message before using it.');
+        setError('Write your message before continuing.');
         return;
       }
       setMode('custom');
@@ -372,7 +361,7 @@ export default function NewCampaignPage() {
       setMessage(text);
       setLibraryOpen(false);
       setError('');
-      setToast('Custom message applied.');
+      setToast('Custom message ready.');
       return;
     }
 
@@ -383,7 +372,7 @@ export default function NewCampaignPage() {
 
     const values = editing.labels.map((_, i) => slots[i]?.trim() || editing.examples[i] || '');
     if (values.some((v) => !v)) {
-      setError('Fill every template field before continuing.');
+      setError('Fill every field before continuing.');
       return;
     }
 
@@ -393,10 +382,8 @@ export default function NewCampaignPage() {
     setMessage(fillTemplateBody(editing.body, values));
     setLibraryOpen(false);
     setError('');
-    setToast(
-      `“${editing.title}” ready — approved on ${approvedPageCount || selected.length} of ${selected.length} page${selected.length === 1 ? '' : 's'}.`
-    );
-    requestAnimationFrame(() => fillSectionRef.current?.scrollIntoView({ behavior: 'smooth' }));
+    setToast(`“${editing.title}” applied.`);
+    requestAnimationFrame(() => messageRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   }
 
   function insertChip(value: string) {
@@ -439,7 +426,7 @@ export default function NewCampaignPage() {
       setPages((prev) =>
         prev.map((p) => ({ ...p, contactCount: counts.get(p.pageId) ?? p.contactCount }))
       );
-      setToast('Audience sync started for selected pages.');
+      setToast('Audience sync started.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Sync failed');
     } finally {
@@ -452,12 +439,11 @@ export default function NewCampaignPage() {
     setBusy(true);
     setError('');
     try {
-      // Warm Instant plain UTILITY on any Page that still looks unready (outside-24h needs it).
       const needPrep = selected.filter(
         (id) => !pages.find((p) => p.pageId === id)?.utilityReady
       );
       if (needPrep.length) {
-        setToast('Preparing Instant UTILITY on selected Pages…');
+        setToast('Preparing Instant send…');
         await api('/api/broadcast/prepare-instant', {
           method: 'POST',
           body: JSON.stringify({ page_ids: needPrep }),
@@ -500,9 +486,7 @@ export default function NewCampaignPage() {
               : undefined,
         }),
       });
-      setToast(
-        `Campaign ${res.campaignId.slice(0, 8)}… queued · ~${res.estimatedRecipients} recipients`
-      );
+      setToast(`Queued · ~${res.estimatedRecipients.toLocaleString()} people`);
       router.push(`/broadcasts/${res.campaignId}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create campaign');
@@ -511,107 +495,117 @@ export default function NewCampaignPage() {
     }
   }
 
-  if (loading) return <LoadingState label="Loading campaign builder..." />;
+  if (loading) return <LoadingState label="Loading campaign builder…" />;
 
   const primaryPageName =
     pages.find((p) => selected.includes(p.pageId))?.name || pages[0]?.name || 'Your Page';
 
+  const templateLabel =
+    mode === 'starter' && applied
+      ? applied.title
+      : mode === 'custom' && message
+        ? 'Custom message'
+        : null;
+
   return (
-    <div className="relative mx-auto max-w-6xl pb-8">
-      <div className="mb-6">
-        <p className="text-xs font-semibold uppercase tracking-wide text-primary">New Campaign</p>
-        <h1 className="text-2xl font-semibold text-slate-900">Broadcast to Messenger</h1>
-        <p className="text-sm text-slate-500">
-          Select pages, pick a template, fill BODY slots, then send.
-        </p>
+    <div className="mx-auto max-w-6xl pb-28">
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <Link href="/broadcasts" className="text-xs font-medium text-slate-400 hover:text-primary">
+            ← Broadcasts
+          </Link>
+          <h1 className="page-title mt-1">New campaign</h1>
+          <p className="page-sub">Pick pages, write a message, send to reachable leads.</p>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-right text-sm">
+          <p className="font-semibold tabular-nums text-slate-900">
+            ~{estimated.toLocaleString()}
+          </p>
+          <p className="text-xs text-slate-500">
+            reachable · {selected.length} page{selected.length === 1 ? '' : 's'}
+            {quota != null ? ` · ${quota.toLocaleString()} credits` : ''}
+          </p>
+        </div>
       </div>
 
       {!hasLiveToken ? (
-        <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-          Session expired / Reconnect required — Facebook account has no live user token. Open{' '}
-          <a href="/reconnect" className="font-semibold underline">
+        <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          Facebook session expired.{' '}
+          <Link href="/reconnect" className="font-semibold underline">
             Reconnect
-          </a>{' '}
-          → tick every Page → allow Utility Messaging → Continue.
+          </Link>{' '}
+          and select every Page you send from.
         </div>
       ) : null}
 
-      {selected.length > 0 && selected.some((id) => !pages.find((p) => p.pageId === id)?.utilityReady) ? (
-        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          Some selected Pages are missing Instant UTILITY approval. Outside-24h sends need Utility
-          Messaging + an APPROVED template. Use{' '}
-          <a href="/reconnect" className="font-semibold underline">
-            Reconnect
-          </a>
-          , tick every Page (including Patrick / all Pages you send from), grant Utility Messaging,
-          then choose a template here so CastMe can sync &amp; approve.
+      {missingUtility ? (
+        <div className="mb-4 rounded-2xl border border-amber-200/80 bg-amber-50/80 px-4 py-3 text-sm text-amber-950">
+          Some pages still need Utility Messaging for older leads.{' '}
+          <Link href="/reconnect" className="font-semibold underline">
+            Reconnect once
+          </Link>{' '}
+          and allow Utility Messaging — or continue; in-window chats still send.
         </div>
       ) : null}
 
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="space-y-8">
-          {/* 1. Pages */}
-          <section className="space-y-4">
-            <div className="flex flex-wrap items-end justify-between gap-3">
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
+        <div className="space-y-5">
+          {/* Pages */}
+          <section className="card p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h2 className="text-lg font-semibold text-slate-900">1. Pages</h2>
-                <p className="text-sm text-slate-500">
-                  {selected.length} of {pages.length} selected · ~{estimated.toLocaleString()}{' '}
-                  reachable
-                  {quota != null ? ` · ${quota.toLocaleString()} credits` : ''}
+                <h2 className="text-base font-semibold text-slate-900">Pages</h2>
+                <p className="mt-0.5 text-sm text-slate-500">
+                  Only reachable (non-blocked) leads are counted.
                 </p>
               </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="btn-secondary !px-3 !py-1.5 text-xs"
+                  onClick={() => setSelected(pages.map((p) => p.pageId))}
+                >
+                  All
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary !px-3 !py-1.5 text-xs"
+                  onClick={() => setSelected([])}
+                >
+                  None
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary !px-3 !py-1.5 text-xs"
+                  disabled={busy || !selected.length}
+                  onClick={syncSelected}
+                >
+                  Sync
+                </button>
+              </div>
+            </div>
+
+            {pages.length > 4 ? (
               <input
-                className="input max-w-xs"
+                className="input mt-3"
                 placeholder="Search pages…"
                 value={pageSearch}
                 onChange={(e) => setPageSearch(e.target.value)}
               />
-            </div>
+            ) : null}
 
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => setSelected(filteredPages.map((p) => p.pageId))}
-              >
-                Select visible
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => setSelected(pages.map((p) => p.pageId))}
-              >
-                Select all
-              </button>
-              <button type="button" className="btn-secondary" onClick={() => setSelected([])}>
-                Clear
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                disabled={busy || !selected.length}
-                onClick={syncSelected}
-              >
-                Sync audience
-              </button>
-            </div>
-
-            <div className="grid gap-2 sm:grid-cols-2">
+            <div className="mt-3 max-h-64 space-y-1.5 overflow-y-auto pr-1">
               {filteredPages.map((p) => {
                 const checked = selected.includes(p.pageId);
                 return (
                   <label
                     key={p.pageId}
-                    className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition ${
-                      checked
-                        ? 'border-primary bg-blue-50/60'
-                        : 'border-slate-200 hover:border-slate-300'
+                    className={`flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 transition ${
+                      checked ? 'bg-primary/5 ring-1 ring-primary/20' : 'hover:bg-slate-50'
                     }`}
                   >
                     <input
                       type="checkbox"
-                      className="mt-1"
                       checked={checked}
                       onChange={(e) => {
                         setSelected((prev) =>
@@ -621,191 +615,209 @@ export default function NewCampaignPage() {
                         );
                       }}
                     />
-                    <span className="min-w-0">
-                      <span className="block truncate font-medium">{p.name}</span>
-                      <span className="mt-0.5 block text-xs text-slate-500">
-                        {(p.contactCount || 0).toLocaleString()} reachable ·{' '}
-                        {p.hasPageToken === false ? 'no token' : 'token ok'}
-                        {p.utilityReady ? ' · Instant ready' : ''}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-slate-900">
+                        {p.name}
+                      </span>
+                      <span className="text-xs text-slate-500">
+                        {(p.contactCount || 0).toLocaleString()} reachable
+                        {p.hasPageToken === false ? ' · needs reconnect' : ''}
                       </span>
                     </span>
                   </label>
                 );
               })}
+              {!filteredPages.length ? (
+                <p className="px-2 py-6 text-center text-sm text-slate-500">No pages match.</p>
+              ) : null}
             </div>
           </section>
 
-          {/* 2. Audience */}
-          <section className="space-y-3">
-            <h2 className="text-lg font-semibold text-slate-900">2. Audience</h2>
-            <div className="rounded-2xl border border-primary/20 bg-primary/5 p-4">
-              <p className="font-semibold text-slate-900">Reachable Messenger leads</p>
-              <p className="mt-1 text-sm text-slate-600">
-                Sends only to people who can still receive messages. Blocked and inactive contacts
-                are excluded automatically (~{estimated.toLocaleString()} on selected pages).
-              </p>
-            </div>
-          </section>
-
-          {/* 3. Template */}
-          <section className="space-y-3">
-            <h2 className="text-lg font-semibold text-slate-900">3. Template</h2>
-            <div className="flex flex-wrap items-center gap-3">
-              <button type="button" className="btn-primary" onClick={openLibrary} disabled={!selected.length}>
-                Choose from Library
+          {/* Message */}
+          <section ref={messageRef} className="card space-y-4 p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-slate-900">Message</h2>
+                <p className="mt-0.5 text-sm text-slate-500">
+                  Choose a template or write a custom Instant message.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-primary !py-2"
+                onClick={openLibrary}
+                disabled={!selected.length || busy}
+              >
+                {templateLabel ? 'Change template' : 'Choose template'}
               </button>
-              {applied ? (
-                <p className="text-sm text-slate-600">
-                  Selected: <span className="font-semibold text-slate-900">{applied.title}</span>
-                  {libraryApproved || mode === 'starter' ? (
-                    <span className="ml-2 text-emerald-700">
-                      · Approved on {approvedPageCount || selected.length} of {selected.length}
-                    </span>
-                  ) : null}
-                </p>
-              ) : mode === 'custom' && message ? (
-                <p className="text-sm text-slate-600">
-                  Selected: <span className="font-semibold">Custom message</span>
-                </p>
-              ) : (
-                <p className="text-sm text-slate-500">No template selected yet.</p>
-              )}
             </div>
-          </section>
 
-          {/* 4. Fill BODY */}
-          <section ref={fillSectionRef} className="space-y-3">
-            <h2 className="text-lg font-semibold text-slate-900">4. Fill BODY variables</h2>
+            {templateLabel ? (
+              <div className="flex flex-wrap items-center gap-2 rounded-xl bg-slate-50 px-3 py-2 text-sm">
+                <span className="font-medium text-slate-900">{templateLabel}</span>
+                {mode === 'starter' ? (
+                  <span className="rounded-md bg-emerald-100 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-800">
+                    Approved {approvedPageCount || selected.length}/{selected.length}
+                  </span>
+                ) : (
+                  <span className="rounded-md bg-sky-100 px-1.5 py-0.5 text-[11px] font-semibold text-sky-800">
+                    Instant
+                  </span>
+                )}
+              </div>
+            ) : null}
+
             {mode === 'starter' && applied ? (
-              <div className="space-y-3 rounded-xl border border-slate-200 p-4">
+              <div className="space-y-3">
                 {applied.labels.map((label, i) => (
-                  <label key={`${applied.id}-fill-${i}`} className="block space-y-1">
+                  <label key={`${applied.id}-fill-${i}`} className="block space-y-1.5">
                     <span className="text-xs font-medium text-slate-600">
-                      BODY {`{{${i + 1}}}`} · {label}
+                      {label}
+                      <span className="ml-1 text-slate-400">{`{{${i + 1}}}`}</span>
                     </span>
                     <input
-                      className="input w-full"
+                      className="input"
                       value={slots[i] || ''}
                       onFocus={() => setFocusedSlot(i)}
                       onChange={(e) => updateAppliedSlot(i, e.target.value)}
                     />
                   </label>
                 ))}
-                <div>
-                  <p className="mb-2 text-xs font-medium text-slate-500">Quick fill</p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {TEMPLATE_QUICK_CHIPS.map((chip) => (
-                      <button
-                        key={chip.label}
-                        type="button"
-                        className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-700 hover:border-primary hover:bg-blue-50 hover:text-primary"
-                        onClick={() => {
-                          insertChip(chip.value);
-                          if (applied) {
-                            const next = [...slots];
-                            const idx = Math.min(
-                              Math.max(focusedSlot, 0),
-                              Math.max(next.length - 1, 0)
-                            );
-                            next[idx] = chip.value;
-                            setMessage(fillTemplateBody(applied.body, next));
-                          }
-                        }}
-                      >
-                        {chip.label}
-                      </button>
-                    ))}
-                  </div>
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {TEMPLATE_QUICK_CHIPS.map((chip) => (
+                    <button
+                      key={chip.label}
+                      type="button"
+                      className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-600 hover:border-primary hover:text-primary"
+                      onClick={() => {
+                        insertChip(chip.value);
+                        if (applied) {
+                          const next = [...slots];
+                          const idx = Math.min(
+                            Math.max(focusedSlot, 0),
+                            Math.max(next.length - 1, 0)
+                          );
+                          next[idx] = chip.value;
+                          setMessage(fillTemplateBody(applied.body, next));
+                        }
+                      }}
+                    >
+                      {chip.label}
+                    </button>
+                  ))}
                 </div>
               </div>
             ) : mode === 'custom' ? (
-              <div className="space-y-3 rounded-xl border border-slate-200 p-4">
-                <label className="block space-y-1">
-                  <span className="text-xs font-medium text-slate-600">Your message</span>
+              <div className="space-y-3">
+                <label className="block space-y-1.5">
+                  <span className="text-xs font-medium text-slate-600">Message text</span>
                   <textarea
-                    className="input min-h-[120px] w-full"
+                    className="input min-h-[120px]"
                     value={message}
                     onChange={(e) => setMessage(e.target.value)}
-                    placeholder="Write a custom Messenger message…"
+                    placeholder="Write your Messenger message…"
                   />
                 </label>
-                <label className="block space-y-1">
-                  <span className="text-xs font-medium text-slate-600">Image URL (optional)</span>
-                  <input
-                    className="input w-full"
-                    value={imageUrl}
-                    onChange={(e) => setImageUrl(e.target.value)}
-                    placeholder="https://…"
-                  />
-                </label>
+                {showAdvanced ? (
+                  <label className="block space-y-1.5">
+                    <span className="text-xs font-medium text-slate-600">Image URL (optional)</span>
+                    <input
+                      className="input"
+                      value={imageUrl}
+                      onChange={(e) => setImageUrl(e.target.value)}
+                      placeholder="https://…"
+                    />
+                  </label>
+                ) : null}
               </div>
             ) : (
-              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-                Choose a template from the library first. After Meta approval, BODY fields unlock
-                here.
+              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/80 px-4 py-8 text-center text-sm text-slate-500">
+                Open the library to pick a Template or Instant message.
               </div>
             )}
           </section>
 
-          {/* 5. Review & send */}
-          <section className="space-y-4">
-            <h2 className="text-lg font-semibold text-slate-900">5. Review &amp; send</h2>
-            <div className="flex flex-wrap gap-2">
-              {SPEED_PRESETS.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => setSpeed(p.id)}
-                  className={`rounded-lg border px-3 py-2 text-left text-sm ${
-                    speed === p.id
-                      ? 'border-primary bg-blue-50 text-primary'
-                      : 'border-slate-200 text-slate-700'
-                  }`}
-                >
-                  <span className="font-medium">{p.label}</span>
-                  <span className="mt-0.5 block text-[11px] text-slate-500">{p.hint}</span>
-                </button>
-              ))}
+          {/* Send */}
+          <section className="card space-y-4 p-5">
+            <div>
+              <h2 className="text-base font-semibold text-slate-900">Send</h2>
+              <p className="mt-0.5 text-sm text-slate-500">Confirm and queue delivery.</p>
             </div>
-            <label className="flex items-start gap-3 text-sm text-slate-700">
+
+            <button
+              type="button"
+              className="text-xs font-medium text-slate-500 hover:text-primary"
+              onClick={() => setShowAdvanced((v) => !v)}
+            >
+              {showAdvanced ? 'Hide advanced' : 'Show advanced (speed, image)'}
+            </button>
+
+            {showAdvanced ? (
+              <label className="block space-y-1.5">
+                <span className="text-xs font-medium text-slate-600">Send speed</span>
+                <select
+                  className="input"
+                  value={speed}
+                  onChange={(e) => setSpeed(e.target.value as SpeedId)}
+                >
+                  {SPEED_PRESETS.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.label} — {p.hint}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+
+            <label className="flex items-start gap-3 rounded-xl bg-slate-50 px-3 py-3 text-sm text-slate-700">
               <input
                 type="checkbox"
-                className="mt-1"
+                className="mt-0.5"
                 checked={compliance}
                 onChange={(e) => setCompliance(e.target.checked)}
               />
               <span>
-                I confirm this message complies with Meta messaging policies and my audience has
-                opted in to receive updates from these Pages.
+                This message follows Meta policies and my audience opted in on these Pages.
               </span>
             </label>
           </section>
 
           {error ? (
-            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+            <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
               {error}
             </div>
           ) : null}
           {toast ? (
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
               {toast}
             </div>
           ) : null}
         </div>
 
+        <div className="hidden lg:block">
+          <MessengerPreview pageName={primaryPageName} text={previewText} />
+        </div>
+      </div>
+
+      {/* Mobile preview */}
+      <div className="mt-6 lg:hidden">
         <MessengerPreview pageName={primaryPageName} text={previewText} />
       </div>
 
-      <div className="sticky bottom-0 z-30 mt-8 border-t border-slate-200 bg-surface/95 px-1 py-3 backdrop-blur supports-[backdrop-filter]:bg-surface/80">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-sm text-slate-600">
-            ~{estimated.toLocaleString()} recipients · {selected.length} page
-            {selected.length === 1 ? '' : 's'}
-            {!compliance ? ' · tick compliance to enable Send' : ''}
-          </p>
+      <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-slate-200/80 bg-white/95 px-4 py-3 backdrop-blur lg:left-[17.5rem]">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3">
+          <div className="text-sm text-slate-600">
+            {!selected.length
+              ? 'Select at least one page'
+              : !hasMessage
+                ? 'Choose or write a message'
+                : !compliance
+                  ? 'Confirm the policy checkbox to send'
+                  : `Ready · ~${estimated.toLocaleString()} reachable`}
+          </div>
           <button
             type="button"
-            className="btn-primary min-w-[140px]"
+            className="btn-primary min-w-[148px]"
             disabled={busy || !canSend}
             onClick={send}
           >
