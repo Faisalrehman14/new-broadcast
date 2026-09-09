@@ -51,7 +51,7 @@ function MessengerPreview({ pageName, text }: { pageName: string; text: string }
                 <p className="text-[10px] text-white/75">Messenger</p>
               </div>
             </div>
-            <div className="min-h-[300px] bg-[linear-gradient(180deg,#f4f7fb_0%,#e8eef6_100%)] p-3 pb-5">
+            <div className="max-h-[420px] min-h-[300px] overflow-y-auto bg-[linear-gradient(180deg,#f4f7fb_0%,#e8eef6_100%)] p-3 pb-5">
               <div className="flex justify-end">
                 <div className="max-w-[88%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-[#0084ff] px-3 py-2 text-[13px] leading-relaxed text-white shadow-sm">
                   {text.trim() || 'Your message preview…'}
@@ -92,6 +92,13 @@ export default function NewCampaignPage() {
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
   const messageRef = useRef<HTMLDivElement>(null);
+  const librarySnapshotRef = useRef<{
+    slots: string[];
+    editing: StarterTemplate | null;
+    libraryApproved: boolean;
+    approvedPageCount: number;
+    focusedSlot: number;
+  } | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -176,9 +183,22 @@ export default function NewCampaignPage() {
     selected.some((id) => !pages.find((p) => p.pageId === id)?.utilityReady);
 
   function openLibrary() {
-    const pick = editing || applied || starters.find((s) => !s.instant) || CUSTOM_STARTER;
+    librarySnapshotRef.current = {
+      slots: [...slots],
+      editing,
+      libraryApproved,
+      approvedPageCount,
+      focusedSlot,
+    };
+    const pick = applied || editing || starters.find((s) => !s.instant) || CUSTOM_STARTER;
     setEditing(pick);
-    setSlots(pick.id === 'custom' ? [message || pick.examples[0] || ''] : defaultSlots(pick));
+    if (applied && applied.id === pick.id && slots.length === pick.labels.length) {
+      setSlots([...slots]);
+    } else if (pick.id === 'custom') {
+      setSlots([message || pick.examples[0] || '']);
+    } else {
+      setSlots(defaultSlots(pick));
+    }
     setFocusedSlot(0);
     const already =
       Boolean(applied && applied.id === pick.id) ||
@@ -190,19 +210,50 @@ export default function NewCampaignPage() {
     setApprovedPageCount(
       pick.id === 'custom'
         ? selected.length
-        : selected.filter((id) => pages.find((p) => p.pageId === id)?.utilityReady).length
+        : applied && applied.id === pick.id
+          ? approvedPageCount || selected.length
+          : selected.filter((id) => pages.find((p) => p.pageId === id)?.utilityReady).length
     );
+    setError('');
     setLibraryOpen(true);
+  }
+
+  function closeLibrary(restore = true) {
+    if (busy) return;
+    if (restore && librarySnapshotRef.current) {
+      const snap = librarySnapshotRef.current;
+      setSlots(snap.slots);
+      setEditing(snap.editing);
+      setLibraryApproved(snap.libraryApproved);
+      setApprovedPageCount(snap.approvedPageCount);
+      setFocusedSlot(snap.focusedSlot);
+    }
+    librarySnapshotRef.current = null;
+    setLibraryOpen(false);
+    setError('');
   }
 
   function selectLibraryItem(tpl: StarterTemplate) {
     if (busy) return;
+    setError('');
     setEditing(tpl);
     setFocusedSlot(0);
     if (tpl.id === 'custom') {
-      setSlots([message || tpl.examples[0] || '']);
+      const snap = librarySnapshotRef.current;
+      const fromSnap =
+        snap && (!snap.editing || snap.editing.id === 'custom') ? snap.slots[0] : '';
+      setSlots([fromSnap || message || tpl.examples[0] || '']);
       setLibraryApproved(true);
       setApprovedPageCount(selected.length);
+    } else if (applied && applied.id === tpl.id) {
+      const snap = librarySnapshotRef.current;
+      const restore =
+        snap && snap.slots.length === tpl.labels.length ? snap.slots : defaultSlots(tpl);
+      setSlots([...restore]);
+      setLibraryApproved(true);
+      setApprovedPageCount(
+        snap?.approvedPageCount || approvedPageCount || selected.length
+      );
     } else {
       setSlots(defaultSlots(tpl));
       setLibraryApproved(false);
@@ -359,6 +410,7 @@ export default function NewCampaignPage() {
       setMode('custom');
       setApplied(null);
       setMessage(text);
+      librarySnapshotRef.current = null;
       setLibraryOpen(false);
       setError('');
       setToast('Custom message ready.');
@@ -380,6 +432,7 @@ export default function NewCampaignPage() {
     setApplied(editing);
     setSlots(values);
     setMessage(fillTemplateBody(editing.body, values));
+    librarySnapshotRef.current = null;
     setLibraryOpen(false);
     setError('');
     setToast(`“${editing.title}” applied.`);
@@ -837,10 +890,9 @@ export default function NewCampaignPage() {
         approvedPageCount={approvedPageCount}
         selectedCount={selected.length}
         focusedSlot={focusedSlot}
+        pageName={primaryPageName}
         error={error}
-        onClose={() => {
-          if (!busy) setLibraryOpen(false);
-        }}
+        onClose={() => closeLibrary(true)}
         onSelect={selectLibraryItem}
         onSlotChange={(index, value) => {
           setSlots((prev) => {
