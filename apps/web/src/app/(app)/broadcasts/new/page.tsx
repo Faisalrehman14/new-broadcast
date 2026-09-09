@@ -59,6 +59,7 @@ export default function NewCampaignPage() {
   const [imageUrl, setImageUrl] = useState('');
   const [speed, setSpeed] = useState<SpeedId>('balanced');
   const [busy, setBusy] = useState(false);
+  const [approveWait, setApproveWait] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
 
@@ -164,36 +165,59 @@ export default function NewCampaignPage() {
     }
   }
 
-  async function warmTemplate(tpl: StarterTemplate) {
-    // Instant presets share castme_plain_utility_v1 — only warm the plain {{1}} body.
-    if (!selected.length) return;
-    if (tpl.id === 'custom') return;
-    try {
-      const payload = tpl.instant
-        ? {
-            template_name: 'castme_plain_utility_v1',
-            body: '{{1}}',
-            language: 'en',
-            example_values: ['Hello from CastMe Pro'],
-          }
-        : {
+  /** Competitor-style: submit Meta UTILITY + poll until APPROVED (or ~1 min). */
+  async function ensureUtilityApproved(tpl: StarterTemplate): Promise<{
+    ready: number;
+    pending: number;
+  }> {
+    if (!selected.length) return { ready: 0, pending: 0 };
+
+    const usePlain = Boolean(tpl.instant) || tpl.name === 'castme_plain_utility_v1';
+    if (usePlain) {
+      await api('/api/broadcast/prepare-instant', {
+        method: 'POST',
+        body: JSON.stringify({ page_ids: selected }),
+      }).catch(() => undefined);
+    } else {
+      for (const pageId of selected.slice(0, 8)) {
+        await api('/api/broadcast/prepare-outside24h', {
+          method: 'POST',
+          body: JSON.stringify({
+            page_id: pageId,
             template_name: tpl.name,
             body: tpl.body,
             language: 'en',
             example_values: tpl.examples.length ? tpl.examples : tpl.parameters,
-          };
-      for (const pageId of selected.slice(0, 5)) {
-        await api('/api/broadcast/prepare-outside24h', {
-          method: 'POST',
-          body: JSON.stringify({ page_id: pageId, ...payload }),
+          }),
         }).catch(() => undefined);
       }
-    } catch {
-      /* warm is best-effort */
     }
+
+    const deadline = Date.now() + 60_000;
+    let ready = 0;
+    let pending = selected.length;
+    while (Date.now() < deadline) {
+      const status = await api<{
+        pages: Array<{ page_id: string; ready: boolean; status: string }>;
+      }>('/api/broadcast/utility-status').catch(() => null);
+      if (status) {
+        const hits = status.pages.filter((x) => selected.includes(x.page_id));
+        ready = hits.filter((x) => x.ready || x.status === 'APPROVED' || x.status === 'approved').length;
+        pending = Math.max(0, selected.length - ready);
+        setPages((prev) =>
+          prev.map((p) => {
+            const hit = status.pages.find((x) => x.page_id === p.pageId);
+            return hit ? { ...p, utilityReady: hit.ready, utilityStatus: hit.status } : p;
+          })
+        );
+        if (ready >= selected.length) break;
+      }
+      await new Promise((r) => setTimeout(r, 2500));
+    }
+    return { ready, pending };
   }
 
-  function applyEditing() {
+  async function applyEditing() {
     if (!editing) return;
     if (editing.id === 'custom') {
       const text = (slots[0] || '').trim();
@@ -215,15 +239,35 @@ export default function NewCampaignPage() {
       setError('Fill every template field before continuing.');
       return;
     }
-    setMode('starter');
-    setApplied(editing);
-    setSlots(values);
-    setMessage(fillTemplateBody(editing.body, values));
-    setLibraryOpen(false);
+
+    setBusy(true);
     setError('');
-    setToast(`Template “${editing.title}” applied.`);
-    void warmTemplate(editing);
-    setStep(3);
+    setApproveWait('Approving template on Meta — please wait up to 1 minute…');
+    try {
+      const { ready, pending } = await ensureUtilityApproved(editing);
+      setMode('starter');
+      setApplied(editing);
+      setSlots(values);
+      setMessage(fillTemplateBody(editing.body, values));
+      setLibraryOpen(false);
+      if (ready > 0 && pending === 0) {
+        setToast(`“${editing.title}” approved — ready to send.`);
+      } else if (ready > 0) {
+        setToast(
+          `“${editing.title}” applied. UTILITY ready on ${ready} Page(s); ${pending} still approving in background.`
+        );
+      } else {
+        setToast(
+          `“${editing.title}” applied. Meta is still approving UTILITY — sends outside 24h wait until APPROVED.`
+        );
+      }
+      setStep(3);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Template approval failed');
+    } finally {
+      setApproveWait(null);
+      setBusy(false);
+    }
   }
 
   function insertToken(token: string) {
@@ -688,6 +732,16 @@ export default function NewCampaignPage() {
       {error ? <p className="text-sm text-danger">{error}</p> : null}
       {toast ? <p className="text-sm text-emerald-700">{toast}</p> : null}
 
+      {approveWait ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-[2px]">
+          <div className="max-w-sm rounded-2xl bg-white px-6 py-5 text-center shadow-xl">
+            <p className="text-base font-semibold text-slate-900">Approving template</p>
+            <p className="mt-2 text-sm text-slate-600">{approveWait}</p>
+            <p className="mt-3 text-xs text-slate-400">Meta decides APPROVED — usually under a minute.</p>
+          </div>
+        </div>
+      ) : null}
+
       <div className="fixed bottom-0 left-0 right-0 z-20 border-t border-slate-200 bg-white/95 backdrop-blur">
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-4 py-3 lg:pl-72">
           <button
@@ -825,8 +879,8 @@ export default function NewCampaignPage() {
               <button type="button" className="btn-secondary" onClick={() => setLibraryOpen(false)}>
                 Cancel
               </button>
-              <button type="button" className="btn-primary" onClick={applyEditing}>
-                Use this template
+              <button type="button" className="btn-primary" disabled={busy} onClick={() => void applyEditing()}>
+                {busy ? 'Approving…' : 'Use this template'}
               </button>
             </div>
           </div>
