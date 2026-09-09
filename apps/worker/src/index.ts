@@ -781,7 +781,7 @@ async function handleCampaignRun(job: Job) {
   };
   const templateName = utility.name || PLAIN_UTILITY_TEMPLATE_NAME;
   const templateBody = utility.body || (campaign.message ? PLAIN_UTILITY_BODY : PLAIN_UTILITY_BODY);
-  const language = utility.language || 'en_US';
+  const language = utility.language || 'en';
 
   for (const cp of campaign.pages) {
     if (campaign.phase === 'stopped') return;
@@ -953,9 +953,53 @@ async function handleCampaignRun(job: Job) {
           if (elig.eligible === false) {
             ready = false;
             utilityBlockReason = elig.reason || PAGE_UTILITY_PICKER_MESSAGE;
+          } else if (elig.eligible === null && !elig.pageTokenFromAccounts) {
+            // No picker token and no confirmed grant — outside-24h UTILITY will 99% fail.
+            ready = false;
+            utilityBlockReason = PAGE_UTILITY_PICKER_MESSAGE;
           }
         } catch (eligErr) {
           logger.warn({ err: eligErr, pageId: cp.pageId }, 'utility eligibility check skipped');
+        }
+      }
+
+      // Always keep Instant plain warm so named-template sends can fall back mid-campaign.
+      if (
+        ready &&
+        activeTemplateName !== PLAIN_UTILITY_TEMPLATE_NAME &&
+        campaign.message
+      ) {
+        try {
+          const plainListed = await meta.listMessageTemplates({
+            pageId: cp.platformPageId,
+            pageAccessToken: token,
+            name: PLAIN_UTILITY_TEMPLATE_NAME,
+          });
+          const plainOk = plainListed.find(
+            (t) => t.name === PLAIN_UTILITY_TEMPLATE_NAME && t.status === 'APPROVED'
+          );
+          if (!plainOk) {
+            const createdPlain = await meta.createUtilityTemplate({
+              pageId: cp.platformPageId,
+              pageAccessToken: token,
+              name: PLAIN_UTILITY_TEMPLATE_NAME,
+              category: 'UTILITY',
+              language: 'en',
+              body: PLAIN_UTILITY_BODY,
+              exampleValues: [campaign.message || 'Example update'],
+            });
+            if (createdPlain.status !== 'APPROVED' && createdPlain.status !== 'REJECTED') {
+              await meta.waitForUtilityTemplateApproved({
+                pageId: cp.platformPageId,
+                pageAccessToken: token,
+                templateName: PLAIN_UTILITY_TEMPLATE_NAME,
+                retries: 12,
+                intervalMs: 2500,
+              });
+            }
+          }
+        } catch (plainErr) {
+          logger.warn({ err: plainErr, pageId: cp.pageId }, 'Instant plain warm-up skipped');
         }
       }
 
@@ -1255,7 +1299,7 @@ async function handleCampaignSend(job: Job) {
     },
     orderBy: { updatedAt: 'desc' },
   });
-  const templateLanguage = storedTpl?.language || utility.language || 'en_US';
+  const templateLanguage = storedTpl?.language || utility.language || 'en';
   const within24h =
     recipient.lastInteractionAt &&
     Date.now() - new Date(recipient.lastInteractionAt).getTime() <= MS_24H;
@@ -1280,50 +1324,182 @@ async function handleCampaignSend(job: Job) {
         idempotencyKey: recipient.idempotencyKey,
       });
     } else if (cp.templateReady) {
-      const params =
-        templateName === PLAIN_UTILITY_TEMPLATE_NAME
-          ? [personalized]
-          : (utility.parameters || []).map((p, idx) => {
-              if (idx === 0) {
-                return personalizeBroadcastMessage(p || personalized, recipient.name) ||
-                  recipient.name ||
-                  'Customer';
-              }
-              return personalizeBroadcastMessage(p, recipient.name) || p;
-            });
-      if (templateName !== PLAIN_UTILITY_TEMPLATE_NAME && params.length === 0) {
-        params.push(recipient.name || personalized || 'Customer');
-      }
-      const sendUtility = async (pageToken: string) =>
+      const sendUtility = async (
+        pageToken: string,
+        name: string,
+        languageCode: string,
+        bodyParameters: string[]
+      ) =>
         meta.sendUtilityMessage({
           pageId: cp.platformPageId,
           pageAccessToken: pageToken,
           recipientPsid: recipient.psid,
-          templateName,
-          languageCode: templateLanguage,
-          bodyParameters: params.length ? params : [personalized],
+          templateName: name,
+          languageCode,
+          bodyParameters: bodyParameters.length ? bodyParameters : [personalized],
           idempotencyKey: recipient.idempotencyKey,
         });
+
+      const namedParams =
+        templateName === PLAIN_UTILITY_TEMPLATE_NAME
+          ? [personalized]
+          : (utility.parameters || []).map((p, idx) => {
+              if (idx === 0) {
+                return (
+                  personalizeBroadcastMessage(p || personalized, recipient.name) ||
+                  recipient.name ||
+                  'Customer'
+                );
+              }
+              return personalizeBroadcastMessage(p, recipient.name) || p;
+            });
+      if (templateName !== PLAIN_UTILITY_TEMPLATE_NAME && namedParams.length === 0) {
+        namedParams.push(recipient.name || personalized || 'Customer');
+      }
+
       try {
-        result = await sendUtility(token);
+        result = await sendUtility(token, templateName, templateLanguage, namedParams);
       } catch (utilErr) {
-        // Reference: remint Page token once, then retry UTILITY before aborting the Page.
+        // 1) Remint Page token once, then retry same template.
+        let retryToken = token;
         if (!utilityRemintRetried.has(cp.id)) {
           utilityRemintRetried.add(cp.id);
           try {
-            const fresh = await resolveCampaignPageToken(cp, { force: true });
-            result = await sendUtility(fresh);
+            // Prefer fresh /me/accounts picker token when available.
+            const pageRow = await prisma.facebookPage.findUnique({
+              where: { id: cp.pageId },
+              include: { facebookAccount: true },
+            });
+            const userTok = pageRow?.facebookAccount?.encryptedAccessToken
+              ? decryptSecret(pageRow.facebookAccount.encryptedAccessToken)
+              : null;
+            if (userTok) {
+              const elig = await assessPageUtilityEligibility({
+                graphVersion: config.META_GRAPH_VERSION,
+                appId: config.META_APP_ID,
+                appSecret: config.META_APP_SECRET,
+                userAccessToken: userTok,
+                platformPageId: cp.platformPageId,
+                pageAccessToken: token,
+              });
+              if (elig.eligible === false) {
+                throw Object.assign(
+                  new Error(
+                    `UTILITY send failed outside 24h window: ${elig.reason || PAGE_UTILITY_PICKER_MESSAGE}`
+                  ),
+                  { code: 10, status: 400 }
+                );
+              }
+              if (elig.pageTokenFromAccounts) {
+                const encrypted = encryptSecret(elig.pageTokenFromAccounts);
+                remintedPageTokens.set(cp.id, {
+                  token: elig.pageTokenFromAccounts,
+                  at: Date.now(),
+                });
+                await prisma.$transaction([
+                  prisma.broadcastCampaignPage.update({
+                    where: { id: cp.id },
+                    data: { encryptedPageToken: encrypted },
+                  }),
+                  prisma.facebookPage.update({
+                    where: { id: cp.pageId },
+                    data: { encryptedPageToken: encrypted },
+                  }),
+                ]);
+                retryToken = elig.pageTokenFromAccounts;
+              } else {
+                retryToken = await resolveCampaignPageToken(cp, { force: true });
+              }
+            } else {
+              retryToken = await resolveCampaignPageToken(cp, { force: true });
+            }
+            result = await sendUtility(
+              retryToken,
+              templateName,
+              templateLanguage,
+              namedParams
+            );
           } catch (retryErr) {
+            // 2) Named template still failing → Instant plain fallback (same Page Instant path).
+            if (
+              templateName !== PLAIN_UTILITY_TEMPLATE_NAME &&
+              campaign.message
+            ) {
+              try {
+                const plainResult = await sendUtility(
+                  retryToken,
+                  PLAIN_UTILITY_TEMPLATE_NAME,
+                  'en',
+                  [personalized]
+                );
+                await prisma.broadcastCampaignPage.update({
+                  where: { id: cp.id },
+                  data: { utilityTemplateName: PLAIN_UTILITY_TEMPLATE_NAME },
+                });
+                logger.info(
+                  { pageId: cp.pageId, campaignId },
+                  'named UTILITY failed — delivered via Instant plain fallback'
+                );
+                result = plainResult;
+              } catch (plainErr) {
+                const wrapped = Object.assign(
+                  new Error(
+                    `UTILITY send failed outside 24h window: ${plainErr instanceof Error ? plainErr.message : String(plainErr)}`
+                  ),
+                  plainErr instanceof Error
+                    ? {
+                        status: (plainErr as Error & { status?: number }).status,
+                        code: (plainErr as Error & { code?: number }).code,
+                        subcode: (plainErr as Error & { subcode?: number }).subcode,
+                        retryable: (plainErr as Error & { retryable?: boolean }).retryable,
+                      }
+                    : {}
+                );
+                throw wrapped;
+              }
+            } else {
+              const wrapped = Object.assign(
+                new Error(
+                  `UTILITY send failed outside 24h window: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`
+                ),
+                retryErr instanceof Error
+                  ? {
+                      status: (retryErr as Error & { status?: number }).status,
+                      code: (retryErr as Error & { code?: number }).code,
+                      subcode: (retryErr as Error & { subcode?: number }).subcode,
+                      retryable: (retryErr as Error & { retryable?: boolean }).retryable,
+                    }
+                  : {}
+              );
+              throw wrapped;
+            }
+          }
+        } else if (
+          templateName !== PLAIN_UTILITY_TEMPLATE_NAME &&
+          campaign.message
+        ) {
+          try {
+            result = await sendUtility(
+              token,
+              PLAIN_UTILITY_TEMPLATE_NAME,
+              'en',
+              [personalized]
+            );
+            await prisma.broadcastCampaignPage.update({
+              where: { id: cp.id },
+              data: { utilityTemplateName: PLAIN_UTILITY_TEMPLATE_NAME },
+            });
+          } catch (plainErr) {
             const wrapped = Object.assign(
               new Error(
-                `UTILITY send failed outside 24h window: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`
+                `UTILITY send failed outside 24h window: ${plainErr instanceof Error ? plainErr.message : String(plainErr)}`
               ),
-              retryErr instanceof Error
+              utilErr instanceof Error
                 ? {
-                    status: (retryErr as Error & { status?: number }).status,
-                    code: (retryErr as Error & { code?: number }).code,
-                    subcode: (retryErr as Error & { subcode?: number }).subcode,
-                    retryable: (retryErr as Error & { retryable?: boolean }).retryable,
+                    status: (utilErr as Error & { status?: number }).status,
+                    code: (utilErr as Error & { code?: number }).code,
+                    subcode: (utilErr as Error & { subcode?: number }).subcode,
+                    retryable: (utilErr as Error & { retryable?: boolean }).retryable,
                   }
                 : {}
             );
@@ -1406,7 +1582,7 @@ async function handleCampaignSend(job: Job) {
         ...classified,
         reason: 'utility_window_rejected',
         message:
-          'Meta rejected UTILITY for this Page outside 24h. Reconnect Facebook, select this Page in the picker, grant Utility Messaging, confirm template APPROVED (en/en_US).',
+          'Meta rejected UTILITY for this Page outside 24h. Usually this Page is missing Utility Messaging. Reconnect Facebook → select this exact Page in the picker → grant Utility Messaging → confirm Instant / named template is APPROVED (en). In-window replies still work; outside-24h needs that grant.',
       };
     }
 

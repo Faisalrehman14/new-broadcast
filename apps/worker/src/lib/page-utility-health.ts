@@ -40,7 +40,7 @@ export async function inspectDebugToken(params: {
   }
 }
 
-function grantUtilityForPage(data: DebugTokenData | null, pageId: string): boolean | null {
+export function grantUtilityForPage(data: DebugTokenData | null, pageId: string): boolean | null {
   if (!data) return null;
   const pid = String(pageId);
   const granular = data.granular_scopes || [];
@@ -108,7 +108,10 @@ export async function resolveMeAccountsPageToken(params: {
 
 /**
  * Utility eligibility for a Page before outside-24h fan-out.
- * Prefer /me/accounts page token (picker). Secondary: debug_token granular grant.
+ *
+ * IMPORTANT: Appearing on /me/accounts is NOT proof of Utility Messaging.
+ * Meta often returns "outside allowed window" for Pages that were connected
+ * for messaging but never granted pages_utility_messaging in the picker.
  */
 export async function assessPageUtilityEligibility(params: {
   graphVersion: string;
@@ -153,18 +156,9 @@ export async function assessPageUtilityEligibility(params: {
     };
   }
 
-  // Strong positive: Page appears on /me/accounts (classic picker token).
-  if (pageTokenFromAccounts) {
-    return {
-      eligible: true,
-      reason: null,
-      pageTokenFromAccounts,
-    };
-  }
-
   // User token can list accounts, but this Page was not ticked in the picker.
   // Do NOT mark ready — stale Page tokens still list templates but UTILITY POST fails as outside_window.
-  if (accountsListedOk && grant !== true) {
+  if (accountsListedOk && !pageTokenFromAccounts) {
     return {
       eligible: false,
       reason: PAGE_UTILITY_PICKER_MESSAGE,
@@ -172,14 +166,17 @@ export async function assessPageUtilityEligibility(params: {
     };
   }
 
+  // Strong positive: granular (or scope-wide) Utility Messaging grant for this Page.
   if (grant === true) {
     return {
       eligible: true,
       reason: null,
-      pageTokenFromAccounts: null,
+      pageTokenFromAccounts,
     };
   }
 
+  // Inconclusive grant — return accounts token for remint, but do NOT claim eligible.
+  // Worker may still try Instant/named UTILITY; first Graph reject aborts outside-24h for this Page.
   return {
     eligible: null,
     reason: null,

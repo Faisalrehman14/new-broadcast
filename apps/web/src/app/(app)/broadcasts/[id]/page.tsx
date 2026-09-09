@@ -238,6 +238,10 @@ export default function CampaignDetailPage() {
                 f.code === 'recipient_unavailable' ||
                 f.code === 'recipient_invalid' ||
                 /unavailable|matching user/i.test(f.message);
+              const utilityFix =
+                f.code === 'utility_window_rejected' ||
+                f.code === 'utility_permission_missing' ||
+                /Utility Messaging|outside 24h/i.test(f.message);
               return (
                 <li key={f.id} className="px-5 py-3">
                   <span className={`font-medium ${soft ? 'text-amber-700' : 'text-red-700'}`}>
@@ -245,6 +249,14 @@ export default function CampaignDetailPage() {
                   </span>
                   <span className="text-slate-600"> — {f.message}</span>
                   {f.psid ? <span className="block text-xs text-slate-400">PSID {f.psid}</span> : null}
+                  {utilityFix ? (
+                    <a
+                      href="/reconnect"
+                      className="mt-1 inline-block text-xs font-semibold text-primary underline"
+                    >
+                      Reconnect Facebook &amp; grant Utility Messaging for this Page
+                    </a>
+                  ) : null}
                 </li>
               );
             })}

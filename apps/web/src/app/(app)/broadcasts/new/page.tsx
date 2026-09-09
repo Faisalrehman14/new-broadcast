@@ -46,8 +46,8 @@ function MessengerPreview({
       <p className="mb-3 text-center text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
         Live Messenger Preview
       </p>
-      <div className="mx-auto w-full max-w-[320px] rounded-[2rem] border-[10px] border-slate-900 bg-slate-900 shadow-xl">
-        <div className="overflow-hidden rounded-[1.4rem] bg-[#eef2f7]">
+      <div className="mx-auto w-full max-w-[300px] rounded-[2rem] border-[10px] border-slate-900 bg-slate-900 shadow-xl">
+        <div className="overflow-hidden rounded-[1.35rem] bg-[#eef2f7]">
           <div className="flex items-center gap-2 bg-[#0084ff] px-3 py-2.5 text-white">
             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-white/20 text-xs font-bold">
               {(pageName || 'P').slice(0, 1).toUpperCase()}
@@ -57,9 +57,9 @@ function MessengerPreview({
               <p className="text-[10px] text-white/80">Messenger</p>
             </div>
           </div>
-          <div className="min-h-[360px] space-y-3 bg-[linear-gradient(180deg,#f4f7fb_0%,#e8eef6_100%)] p-3 pb-6">
+          <div className="min-h-[280px] space-y-3 bg-[linear-gradient(180deg,#f4f7fb_0%,#e8eef6_100%)] p-3 pb-6 sm:min-h-[360px]">
             <div className="flex justify-end">
-              <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-[#0084ff] px-3 py-2 text-[13px] leading-relaxed text-white shadow-sm">
+              <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-[#0084ff] px-3 py-2 text-[13px] leading-relaxed text-white shadow-sm">
                 {text.trim() || 'Your message will appear here…'}
               </div>
             </div>
@@ -113,10 +113,10 @@ function LibraryModal({
   const instant = items.filter((t) => t.instant || t.id === 'custom');
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/50 p-4 pt-10 sm:pt-16">
-      <div className="relative w-full max-w-4xl rounded-2xl bg-white shadow-2xl">
-        <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-5 py-4">
-          <div>
+    <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-slate-900/50 p-3 pt-8 sm:p-4 sm:pt-12">
+      <div className="relative mb-8 w-full max-w-4xl rounded-2xl bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-4 py-4 sm:px-5">
+          <div className="min-w-0">
             <h2 className="text-lg font-semibold text-slate-900">Choose from Library</h2>
             <p className="mt-1 text-sm text-amber-700">
               If this template has never been used on your page, approval usually takes{' '}
@@ -125,11 +125,12 @@ function LibraryModal({
           </div>
           <button
             type="button"
-            className="rounded-lg px-2 py-1 text-slate-500 hover:bg-slate-100"
+            className="shrink-0 rounded-lg px-2.5 py-1.5 text-sm text-slate-500 hover:bg-slate-100"
             onClick={onClose}
             disabled={busy}
+            aria-label="Close"
           >
-            ✕
+            Close
           </button>
         </div>
 
@@ -680,6 +681,18 @@ export default function NewCampaignPage() {
     setBusy(true);
     setError('');
     try {
+      // Warm Instant plain UTILITY on any Page that still looks unready (outside-24h needs it).
+      const needPrep = selected.filter(
+        (id) => !pages.find((p) => p.pageId === id)?.utilityReady
+      );
+      if (needPrep.length) {
+        setToast('Preparing Instant UTILITY on selected Pages…');
+        await api('/api/broadcast/prepare-instant', {
+          method: 'POST',
+          body: JSON.stringify({ page_ids: needPrep }),
+        }).catch(() => undefined);
+      }
+
       const rendered = previewText.trim();
       const useInstant =
         mode === 'custom' || Boolean(applied?.instant) || applied?.id === 'custom';
@@ -702,7 +715,7 @@ export default function NewCampaignPage() {
             ? {
                 name: 'castme_plain_utility_v1',
                 body: '{{1}}',
-                language: 'en_US',
+                language: 'en',
                 parameters: ['message'],
               }
             : mode === 'starter' && applied
@@ -710,7 +723,7 @@ export default function NewCampaignPage() {
                   id: applied.id,
                   name: applied.name,
                   body: applied.body,
-                  language: 'en_US',
+                  language: 'en',
                   parameters: slots.length ? slots : applied.examples,
                 }
               : undefined,
@@ -733,7 +746,7 @@ export default function NewCampaignPage() {
     pages.find((p) => selected.includes(p.pageId))?.name || pages[0]?.name || 'Your Page';
 
   return (
-    <div className="mx-auto max-w-6xl pb-28">
+    <div className="relative mx-auto max-w-6xl pb-8">
       <div className="mb-6">
         <p className="text-xs font-semibold uppercase tracking-wide text-primary">New Campaign</p>
         <h1 className="text-2xl font-semibold text-slate-900">Broadcast to Messenger</h1>
@@ -744,8 +757,23 @@ export default function NewCampaignPage() {
 
       {!hasLiveToken ? (
         <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-          Session expired / Reconnect required — Facebook account has no live user token. Open
-          Reconnect → tick every Page → Continue, then return here.
+          Session expired / Reconnect required — Facebook account has no live user token. Open{' '}
+          <a href="/reconnect" className="font-semibold underline">
+            Reconnect
+          </a>{' '}
+          → tick every Page → allow Utility Messaging → Continue.
+        </div>
+      ) : null}
+
+      {selected.length > 0 && selected.some((id) => !pages.find((p) => p.pageId === id)?.utilityReady) ? (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          Some selected Pages are missing Instant UTILITY approval. Outside-24h sends need Utility
+          Messaging + an APPROVED template. Use{' '}
+          <a href="/reconnect" className="font-semibold underline">
+            Reconnect
+          </a>
+          , tick every Page (including Patrick / all Pages you send from), grant Utility Messaging,
+          then choose a template here so CastMe can sync &amp; approve.
         </div>
       ) : null}
 
@@ -1033,11 +1061,12 @@ export default function NewCampaignPage() {
         <MessengerPreview pageName={primaryPageName} text={previewText} />
       </div>
 
-      <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3">
+      <div className="sticky bottom-0 z-30 mt-8 border-t border-slate-200 bg-surface/95 px-1 py-3 backdrop-blur supports-[backdrop-filter]:bg-surface/80">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-sm text-slate-600">
             ~{estimated.toLocaleString()} recipients · {selected.length} page
             {selected.length === 1 ? '' : 's'}
+            {!compliance ? ' · tick compliance to enable Send' : ''}
           </p>
           <button
             type="button"

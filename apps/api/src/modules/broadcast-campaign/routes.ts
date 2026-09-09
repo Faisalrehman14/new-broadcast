@@ -525,7 +525,7 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
         ? {
             name: PLAIN_UTILITY_TEMPLATE_NAME,
             body: PLAIN_UTILITY_BODY,
-            language: 'en_US',
+            language: 'en',
             parameters: ['message'],
           }
         : undefined);
