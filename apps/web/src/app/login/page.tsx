@@ -56,65 +56,159 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden px-4">
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_#dbeafe_0%,_#f8fafc_55%,_#e2e8f0_100%)]" />
-      <div className="absolute inset-0 opacity-40 [background-image:linear-gradient(to_right,#94a3b822_1px,transparent_1px),linear-gradient(to_bottom,#94a3b822_1px,transparent_1px)] [background-size:32px_32px]" />
-      <div className="relative w-full max-w-md card p-8">
-        <div className="mb-8">
-          <BrandLogo size={72} priority className="mb-4 h-[72px] w-[72px]" />
-          <h1 className="text-2xl font-semibold tracking-tight">{messages.appName}</h1>
-          <p className="mt-1 text-sm text-slate-500">
-            {mode === 'login' ? messages.tagline : mode === 'forgot' ? 'Reset password' : 'Enter reset code'}
+    <div className="relative flex min-h-screen">
+      <div className="relative hidden w-[46%] overflow-hidden bg-ink lg:flex lg:flex-col lg:justify-between lg:p-10">
+        <div
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background:
+              'radial-gradient(600px 400px at 20% 10%, rgba(15,118,110,0.5), transparent 60%), radial-gradient(500px 360px at 90% 90%, rgba(45,212,191,0.12), transparent 55%)',
+          }}
+        />
+        <div className="relative">
+          <BrandLogo size={56} priority className="h-14 w-14 rounded-2xl ring-1 ring-white/15" />
+          <p className="mt-8 font-display text-3xl font-semibold tracking-tight text-white">
+            {messages.appName}
+          </p>
+          <p className="mt-3 max-w-sm text-sm leading-relaxed text-white/55">
+            {messages.tagline}
           </p>
         </div>
-        <form onSubmit={onSubmit} className="space-y-4">
-          <div>
-            <label className="label" htmlFor="email">Email</label>
-            <input id="email" className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+        <p className="relative text-xs text-white/35">
+          Messenger Page broadcasts · Utility-ready delivery
+        </p>
+      </div>
+
+      <div className="relative flex flex-1 items-center justify-center px-4 py-12">
+        <div
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background:
+              'radial-gradient(700px 400px at 80% -10%, rgba(15,118,110,0.08), transparent 50%)',
+          }}
+        />
+        <div className="relative w-full max-w-md animate-fade-up">
+          <div className="mb-8 lg:hidden">
+            <BrandLogo size={56} priority className="mb-4 h-14 w-14" />
+            <h1 className="font-display text-2xl font-semibold tracking-tight">{messages.appName}</h1>
+            <p className="mt-1 text-sm text-slate-500">{messages.tagline}</p>
           </div>
-          {mode === 'login' ? (
-            <div>
-              <label className="label" htmlFor="password">Password</label>
-              <input id="password" className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-            </div>
-          ) : null}
-          {mode === 'reset' ? (
-            <>
-              <div>
-                <label className="label" htmlFor="otp">Code</label>
-                <input id="otp" className="input" value={otp} onChange={(e) => setOtp(e.target.value)} required />
-              </div>
-              <div>
-                <label className="label" htmlFor="newPassword">New password</label>
-                <input id="newPassword" className="input" type="password" minLength={8} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required />
-              </div>
-            </>
-          ) : null}
-          {info ? <p className="text-sm text-emerald-700">{info}</p> : null}
-          {error ? <p className="text-sm text-danger" role="alert">{error}</p> : null}
-          <button className="btn-primary w-full" disabled={loading}>
-            {loading
-              ? 'Please wait…'
-              : mode === 'login'
+
+          <div className="card p-7 md:p-8">
+            <h2 className="font-display text-xl font-semibold text-ink">
+              {mode === 'login'
                 ? 'Sign in'
                 : mode === 'forgot'
-                  ? 'Send reset code'
-                  : 'Update password'}
-          </button>
-        </form>
-        <div className="mt-4 flex justify-between text-sm">
-          {mode === 'login' ? (
-            <button type="button" className="text-primary" onClick={() => setMode('forgot')}>
-              Forgot password?
-            </button>
-          ) : (
-            <button type="button" className="text-primary" onClick={() => setMode('login')}>
-              Back to sign in
-            </button>
-          )}
-          <Link href="/register" className="font-medium text-primary">
-            Create account
-          </Link>
+                  ? 'Reset password'
+                  : 'Enter reset code'}
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              {mode === 'login'
+                ? 'Welcome back to your workspace.'
+                : mode === 'forgot'
+                  ? 'We’ll email a one-time code.'
+                  : 'Use the code from your inbox.'}
+            </p>
+
+            <form onSubmit={onSubmit} className="mt-6 space-y-4">
+              <div>
+                <label className="label" htmlFor="email">
+                  Email
+                </label>
+                <input
+                  id="email"
+                  className="input"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                />
+              </div>
+              {mode === 'login' ? (
+                <div>
+                  <label className="label" htmlFor="password">
+                    Password
+                  </label>
+                  <input
+                    id="password"
+                    className="input"
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                  />
+                </div>
+              ) : null}
+              {mode === 'reset' ? (
+                <>
+                  <div>
+                    <label className="label" htmlFor="otp">
+                      Code
+                    </label>
+                    <input
+                      id="otp"
+                      className="input"
+                      value={otp}
+                      onChange={(e) => setOtp(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="label" htmlFor="newPassword">
+                      New password
+                    </label>
+                    <input
+                      id="newPassword"
+                      className="input"
+                      type="password"
+                      minLength={8}
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      required
+                    />
+                  </div>
+                </>
+              ) : null}
+              {info ? <p className="text-sm text-emerald-700">{info}</p> : null}
+              {error ? (
+                <p className="text-sm text-danger" role="alert">
+                  {error}
+                </p>
+              ) : null}
+              <button className="btn-primary w-full" disabled={loading}>
+                {loading
+                  ? 'Please wait…'
+                  : mode === 'login'
+                    ? 'Sign in'
+                    : mode === 'forgot'
+                      ? 'Send reset code'
+                      : 'Update password'}
+              </button>
+            </form>
+
+            <div className="mt-5 flex justify-between text-sm">
+              {mode === 'login' ? (
+                <button
+                  type="button"
+                  className="font-medium text-primary hover:underline"
+                  onClick={() => setMode('forgot')}
+                >
+                  Forgot password?
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="font-medium text-primary hover:underline"
+                  onClick={() => setMode('login')}
+                >
+                  Back to sign in
+                </button>
+              )}
+              <Link href="/register" className="font-semibold text-primary hover:underline">
+                Create account
+              </Link>
+            </div>
+          </div>
         </div>
       </div>
     </div>

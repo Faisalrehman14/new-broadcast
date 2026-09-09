@@ -137,7 +137,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           planName={me.planName}
           planExpired={me.planExpired}
         />
-        <main className="flex-1 p-4 md:p-6">{children}</main>
+        <main className="animate-fade-up flex-1 p-4 md:p-7 lg:p-8">{children}</main>
       </div>
     </div>
   );

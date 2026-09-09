@@ -78,60 +78,60 @@ export function Sidebar({
   return (
     <>
       <div
-        className={cn('fixed inset-0 z-40 bg-dark/40 lg:hidden', open ? 'block' : 'hidden')}
+        className={cn('fixed inset-0 z-40 bg-ink/50 lg:hidden', open ? 'block' : 'hidden')}
         onClick={onClose}
         aria-hidden
       />
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-50 flex w-[17.5rem] flex-col border-r border-slate-200/80 bg-white/95 backdrop-blur transition-transform lg:static lg:translate-x-0',
+          'fixed inset-y-0 left-0 z-50 flex w-[17.5rem] flex-col bg-ink text-white transition-transform lg:static lg:translate-x-0',
           open ? 'translate-x-0' : '-translate-x-full'
         )}
         aria-label="Main navigation"
       >
-        <div className="border-b border-slate-100 px-4 py-4">
+        <div className="border-b border-white/10 px-4 py-4">
           <div className="flex items-center gap-3">
-            <BrandLogo size={40} className="h-10 w-10 shrink-0" />
+            <BrandLogo size={40} className="h-10 w-10 shrink-0 rounded-xl ring-1 ring-white/15" />
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold tracking-tight text-dark">
+              <p className="truncate font-display text-sm font-semibold tracking-tight">
                 {messages.appName}
               </p>
-              <p className="truncate text-xs text-slate-400">{userName}</p>
+              <p className="truncate text-[11px] text-white/45">{userName}</p>
             </div>
             <button
               type="button"
               onClick={() => void logout()}
-              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:border-slate-300 hover:bg-slate-50"
+              className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-white/15 bg-white/5 px-2 py-1.5 text-[11px] font-semibold text-white/80 transition hover:bg-white/10 hover:text-white"
               title={messages.actions.logout}
             >
               <LogOut className="h-3.5 w-3.5" aria-hidden />
-              {messages.actions.logout}
+              Out
             </button>
           </div>
         </div>
 
-        <div className="border-b border-slate-100 px-4 py-3">
-          <p className="section-label">Workspace</p>
-          <div className="mt-2 rounded-xl bg-slate-50 px-3 py-2.5">
+        <div className="border-b border-white/10 px-4 py-3">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">
+            Workspace
+          </p>
+          <div className="mt-2 rounded-xl bg-white/5 px-3 py-2.5 ring-1 ring-white/10">
             <div className="flex items-baseline justify-between gap-2">
-              <p className="text-sm font-semibold tabular-nums text-slate-900">
+              <p className="font-display text-lg font-semibold tabular-nums tracking-tight">
                 {readyPages}
-                <span className="font-normal text-slate-400">
-                  {pages.length > readyPages ? ` / ${pages.length}` : ''}
+                <span className="text-sm font-normal text-white/35">
+                  {pages.length > readyPages ? `/${pages.length}` : ''}
                 </span>
               </p>
-              <p className="text-[11px] font-medium text-slate-500">
-                page{readyPages === 1 ? '' : 's'} connected
-              </p>
+              <p className="text-[11px] text-white/45">pages live</p>
             </div>
-            <div className="mt-2 flex items-center justify-between gap-2 border-t border-slate-200/70 pt-2">
-              <p className="text-[11px] text-slate-500">
-                {planExpired ? 'Plan expired' : 'Credits left'}
+            <div className="mt-2 flex items-center justify-between gap-2 border-t border-white/10 pt-2">
+              <p className="text-[11px] text-white/45">
+                {planExpired ? 'Plan expired' : 'Credits'}
               </p>
               <p
                 className={cn(
                   'text-xs font-semibold tabular-nums',
-                  lowCredits ? 'text-amber-700' : 'text-slate-800'
+                  lowCredits ? 'text-amber-300' : 'text-teal-300'
                 )}
               >
                 {planExpired ? 'Renew' : remaining.toLocaleString()}
@@ -141,7 +141,7 @@ export function Sidebar({
               <Link
                 href="/connect"
                 onClick={onClose}
-                className="mt-2 block text-xs font-semibold text-primary"
+                className="mt-2 block text-xs font-semibold text-teal-300 hover:text-teal-200"
               >
                 Connect a Page →
               </Link>
@@ -165,17 +165,17 @@ export function Sidebar({
                 className={cn(
                   'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition',
                   activeNav
-                    ? 'bg-primary/10 text-primary'
+                    ? 'bg-primary text-white shadow-sm'
                     : isBilling && lowCredits
-                      ? 'bg-amber-50 text-amber-900 hover:bg-amber-100'
-                      : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                      ? 'bg-amber-500/15 text-amber-100 hover:bg-amber-500/25'
+                      : 'text-white/65 hover:bg-white/5 hover:text-white'
                 )}
               >
-                <Icon className="h-4 w-4 shrink-0" aria-hidden />
+                <Icon className="h-4 w-4 shrink-0 opacity-90" aria-hidden />
                 <span className="flex-1">{item.label}</span>
                 {isBilling ? (
-                  <span className="tabular-nums text-[11px] text-slate-500">
-                    {planExpired ? 'Expired' : remaining.toLocaleString()}
+                  <span className="tabular-nums text-[11px] text-white/45">
+                    {planExpired ? '!' : remaining.toLocaleString()}
                   </span>
                 ) : null}
               </Link>
@@ -188,8 +188,8 @@ export function Sidebar({
               className={cn(
                 'mt-2 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium',
                 pathname.startsWith('/admin')
-                  ? 'bg-primary/10 text-primary'
-                  : 'text-slate-600 hover:bg-slate-50'
+                  ? 'bg-primary text-white'
+                  : 'text-white/65 hover:bg-white/5 hover:text-white'
               )}
             >
               <Shield className="h-4 w-4" aria-hidden />
@@ -197,18 +197,18 @@ export function Sidebar({
             </Link>
           ) : null}
 
-          <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 border-t border-slate-100 px-1 pt-3">
+          <div className="mt-4 flex flex-wrap gap-x-3 gap-y-1 border-t border-white/10 px-1 pt-3">
             <Link
               href="/reconnect"
               onClick={onClose}
-              className="text-[11px] font-medium text-slate-500 hover:text-primary"
+              className="text-[11px] font-medium text-white/40 hover:text-teal-300"
             >
               Reconnect
             </Link>
             <Link
               href="/support"
               onClick={onClose}
-              className="text-[11px] font-medium text-slate-500 hover:text-primary"
+              className="text-[11px] font-medium text-white/40 hover:text-teal-300"
             >
               Support
             </Link>

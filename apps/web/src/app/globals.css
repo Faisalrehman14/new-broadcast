@@ -3,13 +3,14 @@
 @tailwind utilities;
 
 :root {
-  --color-primary: #2563eb;
-  --color-primary-soft: #eff6ff;
-  --color-dark: #0f172a;
-  --color-surface: #f1f5f9;
-  --color-success: #059669;
-  --color-warning: #d97706;
-  --color-danger: #dc2626;
+  /* Ink & Signal — teal accent on deep ink, cool mist surfaces */
+  --color-primary: 15 118 110; /* #0F766E */
+  --color-ink: 11 18 32; /* #0B1220 */
+  --color-surface: 236 240 244; /* #ECF0F4 */
+  --color-mist: 248 250 252; /* #F8FAFC */
+  --color-success: 4 120 87;
+  --color-warning: 180 83 9;
+  --color-danger: 185 28 28;
 }
 
 html,
@@ -18,43 +19,47 @@ body {
 }
 
 body {
-  background-color: var(--color-surface);
+  background-color: rgb(var(--color-surface));
   background-image:
-    radial-gradient(1200px 600px at 10% -10%, rgba(37, 99, 235, 0.08), transparent 55%),
-    radial-gradient(900px 500px at 100% 0%, rgba(14, 165, 233, 0.06), transparent 50%);
+    radial-gradient(900px 520px at 0% -8%, rgba(15, 118, 110, 0.09), transparent 55%),
+    radial-gradient(700px 420px at 100% 0%, rgba(11, 18, 32, 0.05), transparent 50%),
+    linear-gradient(180deg, rgba(248, 250, 252, 0.65) 0%, transparent 28%);
   background-attachment: fixed;
-  color: var(--color-dark);
+  color: rgb(var(--color-ink));
 }
 
 @layer components {
   .card {
-    @apply rounded-2xl border border-slate-200/70 bg-white shadow-card;
+    @apply rounded-2xl border border-ink/8 bg-white/90 shadow-card backdrop-blur-[2px];
   }
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold tracking-tight transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
-    @apply btn bg-primary text-white shadow-sm hover:bg-blue-700;
+    @apply btn bg-primary text-white shadow-sm hover:bg-teal-800;
   }
   .btn-secondary {
-    @apply btn border border-slate-200 bg-white text-slate-800 hover:bg-slate-50;
+    @apply btn border border-ink/10 bg-white text-ink hover:border-ink/20 hover:bg-mist;
   }
   .btn-danger {
-    @apply btn bg-danger text-white hover:bg-red-700;
+    @apply btn bg-danger text-white hover:bg-red-800;
   }
   .input {
-    @apply w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none ring-primary transition focus:border-primary focus:ring-2;
+    @apply w-full rounded-xl border border-ink/10 bg-white px-3 py-2.5 text-sm outline-none transition placeholder:text-slate-400 focus:border-primary/50 focus:ring-2 focus:ring-primary/15;
   }
   .label {
     @apply mb-1.5 block text-sm font-medium text-slate-700;
   }
   .page-title {
-    @apply text-2xl font-semibold tracking-tight text-slate-900;
+    @apply font-display text-2xl font-semibold tracking-tight text-ink md:text-[1.75rem];
   }
   .page-sub {
-    @apply text-sm text-slate-500;
+    @apply mt-1 text-sm leading-relaxed text-slate-500;
   }
   .section-label {
-    @apply text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400;
+    @apply text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400;
+  }
+  .soft-panel {
+    @apply rounded-2xl border border-ink/8 bg-mist/80;
   }
 }

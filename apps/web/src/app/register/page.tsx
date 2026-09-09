@@ -70,17 +70,50 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden px-4">
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_#dbeafe_0%,_#f8fafc_55%,_#e2e8f0_100%)]" />
-      <div className="relative w-full max-w-md card p-8">
-        <BrandLogo size={64} priority className="mb-4 h-16 w-16" />
-        <h1 className="text-2xl font-semibold">{messages.appName}</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          {step === 'details' ? 'Create your workspace' : 'Verify your email'}
-        </p>
+    <div className="relative flex min-h-screen">
+      <div className="relative hidden w-[46%] overflow-hidden bg-ink lg:flex lg:flex-col lg:justify-between lg:p-10">
+        <div
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background:
+              'radial-gradient(600px 400px at 20% 10%, rgba(15,118,110,0.5), transparent 60%), radial-gradient(500px 360px at 90% 90%, rgba(45,212,191,0.12), transparent 55%)',
+          }}
+        />
+        <div className="relative">
+          <BrandLogo size={56} priority className="h-14 w-14 rounded-2xl ring-1 ring-white/15" />
+          <p className="mt-8 font-display text-3xl font-semibold tracking-tight text-white">
+            {messages.appName}
+          </p>
+          <p className="mt-3 max-w-sm text-sm leading-relaxed text-white/55">
+            {messages.tagline}
+          </p>
+        </div>
+        <p className="relative text-xs text-white/35">Start free · connect Pages in minutes</p>
+      </div>
+
+      <div className="relative flex flex-1 items-center justify-center px-4 py-12">
+        <div
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background:
+              'radial-gradient(700px 400px at 80% -10%, rgba(15,118,110,0.08), transparent 50%)',
+          }}
+        />
+        <div className="relative w-full max-w-md animate-fade-up card p-7 md:p-8">
+          <div className="mb-6 lg:hidden">
+            <BrandLogo size={56} priority className="mb-4 h-14 w-14" />
+          </div>
+          <h1 className="font-display text-xl font-semibold tracking-tight text-ink">
+            {step === 'details' ? 'Create your workspace' : 'Verify your email'}
+          </h1>
+          <p className="mt-1 text-sm text-slate-500">
+            {step === 'details'
+              ? 'One account for all your Messenger Pages.'
+              : `Enter the code we sent to ${email || 'your email'}.`}
+          </p>
 
         {step === 'details' ? (
-          <form onSubmit={onDetails} className="mt-8 space-y-4">
+          <form onSubmit={onDetails} className="mt-6 space-y-4">
             <div>
               <label className="label" htmlFor="name">Name</label>
               <input id="name" className="input" value={name} onChange={(e) => setName(e.target.value)} required />
@@ -99,10 +132,7 @@ export default function RegisterPage() {
             </button>
           </form>
         ) : (
-          <form onSubmit={onRegister} className="mt-8 space-y-4">
-            <p className="text-sm text-slate-600">
-              We sent a code to <strong>{email}</strong>
-            </p>
+          <form onSubmit={onRegister} className="mt-6 space-y-4">
             <div>
               <label className="label" htmlFor="otp">6-digit code</label>
               <input
@@ -136,10 +166,11 @@ export default function RegisterPage() {
 
         <p className="mt-6 text-center text-sm text-slate-500">
           Already have an account?{' '}
-          <Link href="/login" className="font-medium text-primary">
+          <Link href="/login" className="font-semibold text-primary hover:underline">
             Sign in
           </Link>
         </p>
+        </div>
       </div>
     </div>
   );

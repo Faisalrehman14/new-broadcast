@@ -1,6 +1,6 @@
 export const messages = {
   appName: 'CastMe Pro',
-  tagline: 'Customer messaging & broadcast management',
+  tagline: 'Reach every Messenger lead — on brand, on time.',
   nav: {
     dashboard: 'Dashboard',
     broadcasts: 'Broadcasts',

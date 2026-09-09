@@ -56,11 +56,11 @@ export default function BroadcastsPage() {
   if (loading) return <LoadingState label="Loading campaigns…" />;
 
   return (
-    <div className="space-y-6">
+    <div className="mx-auto max-w-6xl space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="page-title">Broadcasts</h1>
-          <p className="page-sub">Create, monitor, and deliver Messenger campaigns</p>
+          <p className="page-sub">Create, monitor, and deliver Messenger campaigns.</p>
         </div>
         <Link href="/broadcasts/new" className="btn-primary">
           New campaign
@@ -70,14 +70,19 @@ export default function BroadcastsPage() {
       {active ? (
         <Link
           href={`/broadcasts/${active.id}`}
-          className="block rounded-2xl border border-primary/20 bg-primary/5 px-4 py-3 transition hover:bg-primary/10"
+          className="block overflow-hidden rounded-2xl border border-primary/25 bg-gradient-to-r from-primary/10 via-white to-white px-5 py-4 shadow-card transition hover:shadow-lift"
         >
-          <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-primary">Live now</p>
-              <p className="mt-0.5 font-semibold text-slate-900">{titleFor(active)}</p>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">
+                Live now
+              </p>
+              <p className="mt-1 font-display text-lg font-semibold text-ink">
+                {titleFor(active)}
+              </p>
               <p className="mt-1 text-sm text-slate-600">
-                {active.phaseMessage || active.phase} · {active.sentCount.toLocaleString()} delivered
+                {active.phaseMessage || active.phase} · {active.sentCount.toLocaleString()}{' '}
+                delivered
                 {active.failedCount ? ` · ${active.failedCount} failed` : ''}
               </p>
             </div>
@@ -97,44 +102,41 @@ export default function BroadcastsPage() {
         />
       ) : (
         <div className="card overflow-hidden">
-          <table className="min-w-full text-left text-sm">
-            <thead className="bg-slate-50/80 text-xs uppercase tracking-wide text-slate-500">
-              <tr>
-                <th className="px-5 py-3 font-semibold">Campaign</th>
-                <th className="px-5 py-3 font-semibold">Status</th>
-                <th className="px-5 py-3 font-semibold">Audience</th>
-                <th className="px-5 py-3 font-semibold">Delivered</th>
-                <th className="px-5 py-3 font-semibold">Created</th>
-              </tr>
-            </thead>
-            <tbody>
-              {campaigns.map((c) => (
-                <tr key={c.id} className="border-t border-slate-100 hover:bg-slate-50/60">
-                  <td className="px-5 py-3">
-                    <Link href={`/broadcasts/${c.id}`} className="font-medium text-slate-900 hover:text-primary">
-                      {titleFor(c)}
-                    </Link>
-                  </td>
-                  <td className="px-5 py-3">
-                    <StatusBadge status={c.phase.toUpperCase()} />
-                  </td>
-                  <td className="px-5 py-3 tabular-nums text-slate-600">
-                    {c.estimatedRecipients.toLocaleString()}
-                  </td>
-                  <td className="px-5 py-3 tabular-nums">
-                    <span className="text-emerald-700">{c.sentCount.toLocaleString()}</span>
-                    {c.failedCount || c.skippedCount ? (
-                      <span className="text-slate-400">
-                        {' '}
-                        / {(c.failedCount + c.skippedCount).toLocaleString()} other
+          <div className="border-b border-ink/5 px-5 py-3">
+            <p className="section-label mb-0">Campaign history</p>
+          </div>
+          <ul className="divide-y divide-ink/5">
+            {campaigns.map((c) => (
+              <li key={c.id}>
+                <Link
+                  href={`/broadcasts/${c.id}`}
+                  className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5 transition hover:bg-mist/70"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-medium text-ink">{titleFor(c)}</p>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      {formatRelative(c.createdAt)} · {c.estimatedRecipients.toLocaleString()}{' '}
+                      audience
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-4 text-sm">
+                    <span className="tabular-nums">
+                      <span className="font-semibold text-emerald-700">
+                        {c.sentCount.toLocaleString()}
                       </span>
-                    ) : null}
-                  </td>
-                  <td className="px-5 py-3 text-slate-500">{formatRelative(c.createdAt)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                      {(c.failedCount || c.skippedCount) > 0 ? (
+                        <span className="text-slate-400">
+                          {' '}
+                          / {(c.failedCount + c.skippedCount).toLocaleString()}
+                        </span>
+                      ) : null}
+                    </span>
+                    <StatusBadge status={c.phase.toUpperCase()} />
+                  </div>
+                </Link>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
     </div>

@@ -138,8 +138,8 @@ export default function AnalyticsPage() {
                       <XAxis dataKey="name" tick={{ fontSize: 11 }} />
                       <YAxis tick={{ fontSize: 11 }} />
                       <Tooltip />
-                      <Bar dataKey="sent" name="Delivered" fill="#2563EB" radius={[4, 4, 0, 0]} />
-                      <Bar dataKey="failed" name="Failed" fill="#DC2626" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="sent" name="Delivered" fill="#0F766E" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="failed" name="Failed" fill="#B91C1C" radius={[4, 4, 0, 0]} />
                       <Bar dataKey="skipped" name="Skipped" fill="#94A3B8" radius={[4, 4, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
@@ -165,8 +165,8 @@ export default function AnalyticsPage() {
                         type="monotone"
                         dataKey="count"
                         name="New contacts"
-                        stroke="#0EA5E9"
-                        fill="#E0F2FE"
+                        stroke="#0F766E"
+                        fill="#CCFBF1"
                         strokeWidth={2}
                       />
                     </AreaChart>
