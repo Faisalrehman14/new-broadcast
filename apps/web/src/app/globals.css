@@ -10,8 +10,6 @@
   --color-success: #059669;
   --color-warning: #d97706;
   --color-danger: #dc2626;
-  --surface-glow: radial-gradient(1200px 600px at 10% -10%, rgba(37, 99, 235, 0.08), transparent 55%),
-    radial-gradient(900px 500px at 100% 0%, rgba(14, 165, 233, 0.06), transparent 50%);
 }
 
 html,
@@ -20,16 +18,17 @@ body {
 }
 
 body {
-  background: var(--color-surface);
-  background-image: var(--surface-glow);
+  background-color: var(--color-surface);
+  background-image:
+    radial-gradient(1200px 600px at 10% -10%, rgba(37, 99, 235, 0.08), transparent 55%),
+    radial-gradient(900px 500px at 100% 0%, rgba(14, 165, 233, 0.06), transparent 50%);
   background-attachment: fixed;
   color: var(--color-dark);
-  font-feature-settings: 'ss01' on, 'cv11' on;
 }
 
 @layer components {
   .card {
-    @apply rounded-2xl border border-slate-200/70 bg-white/90 shadow-card backdrop-blur-sm;
+    @apply rounded-2xl border border-slate-200/70 bg-white shadow-card;
   }
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50;
@@ -44,7 +43,7 @@ body {
     @apply btn bg-danger text-white hover:bg-red-700;
   }
   .input {
-    @apply w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none ring-primary transition focus:border-primary/40 focus:ring-2;
+    @apply w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none ring-primary transition focus:border-primary focus:ring-2;
   }
   .label {
     @apply mb-1.5 block text-sm font-medium text-slate-700;
