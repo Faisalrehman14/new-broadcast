@@ -1,9 +1,12 @@
 import {
   STARTER_UTILITY_TEMPLATES,
+  TEMPLATE_QUICK_CHIPS,
   type StarterUtilityTemplate,
 } from '@pagebroadcast/validation';
 
 export type StarterTemplate = StarterUtilityTemplate;
+
+export { TEMPLATE_QUICK_CHIPS };
 
 /** Local fallback = full reference catalog (same as API). */
 export const STARTER_COPY: StarterTemplate[] = STARTER_UTILITY_TEMPLATES.map((t) => ({ ...t }));
@@ -32,8 +35,17 @@ export function isNameLabel(label: string): boolean {
   return /name/i.test(label);
 }
 
+function templateSortKey(t: StarterTemplate): number {
+  if (t.instant) return 10_000;
+  const m = /^Template-(\d+)$/i.exec(t.title);
+  if (m) return Number(m[1]);
+  return 9_000;
+}
+
 export function mergeStarters(
-  apiStarters: Array<Partial<StarterTemplate> & { id: string; name: string; title: string; body: string }>
+  apiStarters: Array<
+    Partial<StarterTemplate> & { id: string; name: string; title: string; body: string }
+  >
 ): StarterTemplate[] {
   const byName = new Map(STARTER_COPY.map((s) => [s.name, s]));
   const merged = apiStarters.map((s) => {
@@ -42,7 +54,7 @@ export function mergeStarters(
       id: s.id,
       name: s.name,
       title: s.title,
-      badge: s.badge || local?.badge || 'Starter',
+      badge: s.badge || local?.badge || 'EN',
       description: s.description || local?.description || '',
       body: s.body,
       parameters: s.parameters || local?.parameters || [],
@@ -51,7 +63,6 @@ export function mergeStarters(
       instant: Boolean(s.instant ?? local?.instant),
     } satisfies StarterTemplate;
   });
-  // Prefer full local/reference catalog when API response is thinner/older
   const ids = new Set(merged.map((m) => m.id));
   for (const s of STARTER_COPY) {
     if (!ids.has(s.id)) {
@@ -61,8 +72,8 @@ export function mergeStarters(
       });
     }
   }
-  // Instant presets first in the library
-  merged.sort((a, b) => Number(Boolean(b.instant)) - Number(Boolean(a.instant)));
+  // Numbered Template-N first; Instant presets after
+  merged.sort((a, b) => templateSortKey(a) - templateSortKey(b) || a.title.localeCompare(b.title));
   return merged;
 }
 

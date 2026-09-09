@@ -178,5 +178,6 @@ export {
   STARTER_UTILITY_TEMPLATES,
   STARTER_UTILITY_TEMPLATE_COUNT,
   INSTANT_PLAIN_UTILITY_NAME,
+  TEMPLATE_QUICK_CHIPS,
   type StarterUtilityTemplate,
 } from './starter-catalog.js';

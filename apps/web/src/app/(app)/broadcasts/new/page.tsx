@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { LoadingState } from '@/components/EmptyState';
 import {
   CUSTOM_STARTER,
   SPEED_PRESETS,
+  TEMPLATE_QUICK_CHIPS,
   fillTemplateBody,
   isNameLabel,
   mergeStarters,
@@ -24,12 +25,7 @@ type PageRow = {
 };
 
 type SpeedId = (typeof SPEED_PRESETS)[number]['id'];
-
-const STEPS = [
-  { id: 1, label: 'Pages' },
-  { id: 2, label: 'Template' },
-  { id: 3, label: 'Review & send' },
-] as const;
+type AudienceMode = 'all' | 'label' | 'pick';
 
 function defaultSlots(tpl: StarterTemplate): string[] {
   return tpl.labels.map((label, i) => {
@@ -38,10 +34,271 @@ function defaultSlots(tpl: StarterTemplate): string[] {
   });
 }
 
+function MessengerPreview({
+  pageName,
+  text,
+}: {
+  pageName: string;
+  text: string;
+}) {
+  return (
+    <aside className="lg:sticky lg:top-6">
+      <p className="mb-3 text-center text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+        Live Messenger Preview
+      </p>
+      <div className="mx-auto w-full max-w-[320px] rounded-[2rem] border-[10px] border-slate-900 bg-slate-900 shadow-xl">
+        <div className="overflow-hidden rounded-[1.4rem] bg-[#eef2f7]">
+          <div className="flex items-center gap-2 bg-[#0084ff] px-3 py-2.5 text-white">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-white/20 text-xs font-bold">
+              {(pageName || 'P').slice(0, 1).toUpperCase()}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-semibold">{pageName || 'Your Page'}</p>
+              <p className="text-[10px] text-white/80">Messenger</p>
+            </div>
+          </div>
+          <div className="min-h-[360px] space-y-3 bg-[linear-gradient(180deg,#f4f7fb_0%,#e8eef6_100%)] p-3 pb-6">
+            <div className="flex justify-end">
+              <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-[#0084ff] px-3 py-2 text-[13px] leading-relaxed text-white shadow-sm">
+                {text.trim() || 'Your message will appear here…'}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function LibraryModal({
+  open,
+  items,
+  editing,
+  slots,
+  busy,
+  approveWait,
+  libraryApproved,
+  approvedPageCount,
+  selectedCount,
+  focusedSlot,
+  error,
+  onClose,
+  onSelect,
+  onSlotChange,
+  onFocusSlot,
+  onChip,
+  onUseTemplate,
+}: {
+  open: boolean;
+  items: StarterTemplate[];
+  editing: StarterTemplate | null;
+  slots: string[];
+  busy: boolean;
+  approveWait: string | null;
+  libraryApproved: boolean;
+  approvedPageCount: number;
+  selectedCount: number;
+  focusedSlot: number;
+  error: string;
+  onClose: () => void;
+  onSelect: (tpl: StarterTemplate) => void;
+  onSlotChange: (index: number, value: string) => void;
+  onFocusSlot: (index: number) => void;
+  onChip: (value: string) => void;
+  onUseTemplate: () => void;
+}) {
+  if (!open) return null;
+
+  const numbered = items.filter((t) => !t.instant && t.id !== 'custom');
+  const instant = items.filter((t) => t.instant || t.id === 'custom');
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/50 p-4 pt-10 sm:pt-16">
+      <div className="relative w-full max-w-4xl rounded-2xl bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-5 py-4">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">Choose from Library</h2>
+            <p className="mt-1 text-sm text-amber-700">
+              If this template has never been used on your page, approval usually takes{' '}
+              <span className="font-semibold">30–60 seconds</span>. Please keep this window open.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="rounded-lg px-2 py-1 text-slate-500 hover:bg-slate-100"
+            onClick={onClose}
+            disabled={busy}
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="grid max-h-[min(78vh,820px)] gap-0 lg:grid-cols-[1.15fr_0.85fr]">
+          <div className="overflow-y-auto border-b border-slate-100 p-4 lg:border-b-0 lg:border-r">
+            <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Templates
+            </p>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {numbered.map((tpl) => {
+                const active = editing?.id === tpl.id;
+                return (
+                  <button
+                    key={tpl.id}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onSelect(tpl)}
+                    className={`rounded-xl border p-3 text-left transition ${
+                      active
+                        ? 'border-primary bg-blue-50/70 ring-1 ring-primary/30'
+                        : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <span className="font-semibold text-slate-900">{tpl.title}</span>
+                      <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-600">
+                        {tpl.badge || 'EN'}
+                      </span>
+                    </div>
+                    <p className="line-clamp-4 whitespace-pre-wrap text-xs leading-relaxed text-slate-600">
+                      {tpl.body}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+
+            {instant.length ? (
+              <>
+                <p className="mb-3 mt-6 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Instant (shared plain UTILITY)
+                </p>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {instant.map((tpl) => {
+                    const active = editing?.id === tpl.id;
+                    return (
+                      <button
+                        key={tpl.id}
+                        type="button"
+                        disabled={busy}
+                        onClick={() => onSelect(tpl)}
+                        className={`rounded-xl border p-3 text-left transition ${
+                          active
+                            ? 'border-emerald-500 bg-emerald-50/60 ring-1 ring-emerald-400/40'
+                            : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                        }`}
+                      >
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <span className="font-semibold text-slate-900">{tpl.title}</span>
+                          <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-700">
+                            Instant
+                          </span>
+                        </div>
+                        <p className="line-clamp-3 whitespace-pre-wrap text-xs leading-relaxed text-slate-600">
+                          {tpl.body}
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            ) : null}
+          </div>
+
+          <div className="relative overflow-y-auto p-4">
+            {approveWait ? (
+              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-white/90 px-6 text-center backdrop-blur-[1px]">
+                <div className="h-10 w-10 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                <p className="text-sm font-semibold text-slate-800">Checking template approval…</p>
+                <p className="text-sm text-slate-600">{approveWait}</p>
+                <p className="text-xs text-amber-700">Working on this one… please wait.</p>
+              </div>
+            ) : null}
+
+            {editing ? (
+              <div className="space-y-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Selected
+                  </p>
+                  <h3 className="text-base font-semibold text-slate-900">{editing.title}</h3>
+                  {libraryApproved ? (
+                    <p className="mt-1 text-sm text-emerald-700">
+                      Approved on {approvedPageCount || selectedCount} of {selectedCount} page
+                      {selectedCount === 1 ? '' : 's'}
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-sm text-slate-500">
+                      Click a card to sync &amp; approve on Meta.
+                    </p>
+                  )}
+                </div>
+
+                {libraryApproved ? (
+                  <div className="space-y-3">
+                    <p className="text-sm font-semibold text-slate-800">Fill the variables</p>
+                    {editing.labels.map((label, i) => (
+                      <label key={`${editing.id}-${i}`} className="block space-y-1">
+                        <span className="text-xs font-medium text-slate-600">
+                          BODY {`{{${i + 1}}}`} · {label}
+                        </span>
+                        <input
+                          className="input w-full"
+                          value={slots[i] || ''}
+                          onFocus={() => onFocusSlot(i)}
+                          onChange={(e) => onSlotChange(i, e.target.value)}
+                          placeholder={editing.examples[i] || `Value for {{${i + 1}}}`}
+                        />
+                      </label>
+                    ))}
+                    <div>
+                      <p className="mb-2 text-xs font-medium text-slate-500">Quick fill</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {TEMPLATE_QUICK_CHIPS.map((chip) => (
+                          <button
+                            key={chip.label}
+                            type="button"
+                            className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-700 hover:border-primary hover:bg-blue-50 hover:text-primary"
+                            onClick={() => onChip(chip.value)}
+                          >
+                            {chip.label}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="mt-1 text-[10px] text-slate-400">
+                        Inserts into BODY {`{{${focusedSlot + 1}}}`}
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                    Variable fields unlock after Meta approval.
+                  </div>
+                )}
+
+                {error ? <p className="text-sm text-red-600">{error}</p> : null}
+
+                <button
+                  type="button"
+                  className="btn-primary w-full"
+                  disabled={busy || !libraryApproved}
+                  onClick={onUseTemplate}
+                >
+                  Use this template
+                </button>
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">Select a template card to begin.</p>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function NewCampaignPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
-  const [step, setStep] = useState<1 | 2 | 3>(1);
   const [pages, setPages] = useState<PageRow[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [pageSearch, setPageSearch] = useState('');
@@ -49,22 +306,23 @@ export default function NewCampaignPage() {
   const [quota, setQuota] = useState<number | null>(null);
   const [starters, setStarters] = useState<StarterTemplate[]>([]);
   const [libraryOpen, setLibraryOpen] = useState(false);
-  const [libraryFilter, setLibraryFilter] = useState('All');
-  const [librarySearch, setLibrarySearch] = useState('');
   const [editing, setEditing] = useState<StarterTemplate | null>(null);
   const [slots, setSlots] = useState<string[]>([]);
+  const [focusedSlot, setFocusedSlot] = useState(0);
   const [mode, setMode] = useState<'starter' | 'custom'>('custom');
   const [applied, setApplied] = useState<StarterTemplate | null>(null);
   const [message, setMessage] = useState('');
   const [imageUrl, setImageUrl] = useState('');
   const [speed, setSpeed] = useState<SpeedId>('balanced');
+  const [audience, setAudience] = useState<AudienceMode>('all');
+  const [compliance, setCompliance] = useState(false);
   const [busy, setBusy] = useState(false);
   const [approveWait, setApproveWait] = useState<string | null>(null);
-  /** Competitor-style: Meta approve first, then unlock variable editing. */
   const [libraryApproved, setLibraryApproved] = useState(false);
   const [approvedPageCount, setApprovedPageCount] = useState(0);
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
+  const fillSectionRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     Promise.all([
@@ -74,17 +332,21 @@ export default function NewCampaignPage() {
         quota?: { creditsRemaining: number };
       }>('/api/auth/me'),
       api<{
-        starters: Array<Partial<StarterTemplate> & { id: string; name: string; title: string; body: string }>;
+        starters: Array<
+          Partial<StarterTemplate> & { id: string; name: string; title: string; body: string }
+        >;
       }>('/api/broadcast/templates'),
       api<{ pages: Array<{ page_id: string; contact_count: number }> }>(
         '/api/broadcast/audience/status'
       ),
       api<{
         pages: Array<{ page_id: string; ready: boolean; status: string }>;
-      }>('/api/broadcast/utility-status').catch(() => ({ pages: [] as Array<{ page_id: string; ready: boolean; status: string }> })),
+      }>('/api/broadcast/utility-status').catch(() => ({
+        pages: [] as Array<{ page_id: string; ready: boolean; status: string }>,
+      })),
     ])
-      .then(([me, tpl, audience, utility]) => {
-        const counts = new Map(audience.pages.map((p) => [p.page_id, p.contact_count]));
+      .then(([me, tpl, audienceStatus, utility]) => {
+        const counts = new Map(audienceStatus.pages.map((p) => [p.page_id, p.contact_count]));
         const util = new Map(utility.pages.map((p) => [p.page_id, p]));
         const rows = me.pages.map((p) => ({
           ...p,
@@ -97,11 +359,11 @@ export default function NewCampaignPage() {
         setHasLiveToken(me.hasLiveToken !== false);
         setQuota(me.quota?.creditsRemaining ?? null);
         setStarters(mergeStarters(tpl.starters || []));
-        // Kick auto-approve in background for any Page missing Instant UTILITY
         if (rows.some((p) => !p.utilityReady)) {
-          void api('/api/broadcast/auto-utility', { method: 'POST', body: JSON.stringify({}) }).catch(
-            () => undefined
-          );
+          void api('/api/broadcast/auto-utility', {
+            method: 'POST',
+            body: JSON.stringify({}),
+          }).catch(() => undefined);
         }
       })
       .finally(() => setLoading(false));
@@ -114,7 +376,10 @@ export default function NewCampaignPage() {
   }, [pages, pageSearch]);
 
   const estimated = useMemo(
-    () => pages.filter((p) => selected.includes(p.pageId)).reduce((s, p) => s + (p.contactCount || 0), 0),
+    () =>
+      pages
+        .filter((p) => selected.includes(p.pageId))
+        .reduce((s, p) => s + (p.contactCount || 0), 0),
     [pages, selected]
   );
 
@@ -124,42 +389,32 @@ export default function NewCampaignPage() {
     return fillTemplateBody(applied.body, slots.length ? slots : defaultSlots(applied));
   }, [mode, message, applied, slots]);
 
-  const badges = useMemo(() => {
-    const set = new Set(starters.map((s) => s.badge));
-    const rest = Array.from(set).filter((b) => b !== 'Instant');
-    return ['All', 'Instant', 'Custom', ...rest.filter((b) => b !== 'Custom')];
+  const libraryItems = useMemo(() => {
+    const numbered = starters.filter((s) => !s.instant);
+    const instant = starters.filter((s) => s.instant);
+    return [...numbered, CUSTOM_STARTER, ...instant];
   }, [starters]);
 
-  const libraryItems = useMemo(() => {
-    const q = librarySearch.trim().toLowerCase();
-    let list: StarterTemplate[] = [...starters];
-    if (libraryFilter === 'Custom') list = [CUSTOM_STARTER];
-    else if (libraryFilter !== 'All') list = list.filter((s) => s.badge === libraryFilter);
-    if (q) {
-      list = list.filter(
-        (s) =>
-          s.title.toLowerCase().includes(q) ||
-          s.description.toLowerCase().includes(q) ||
-          s.name.toLowerCase().includes(q)
-      );
-    }
-    if (libraryFilter === 'All') list = [CUSTOM_STARTER, ...list];
-    return list;
-  }, [starters, libraryFilter, librarySearch]);
+  const canSend =
+    selected.length > 0 &&
+    hasLiveToken &&
+    compliance &&
+    audience === 'all' &&
+    (mode === 'custom'
+      ? Boolean(message.trim() || imageUrl.trim())
+      : Boolean(applied && previewText.trim()));
 
-  const canNextFrom1 = selected.length > 0 && hasLiveToken;
-  const canNextFrom2 =
-    mode === 'custom' ? Boolean(message.trim() || imageUrl.trim()) : Boolean(applied && previewText.trim());
-  const canSend = canNextFrom1 && canNextFrom2;
-
-  function openLibrary(preselect?: StarterTemplate) {
-    const pick = preselect || editing || applied || starters[0] || CUSTOM_STARTER;
+  function openLibrary() {
+    const pick = editing || applied || starters.find((s) => !s.instant) || CUSTOM_STARTER;
     setEditing(pick);
     setSlots(pick.id === 'custom' ? [message || pick.examples[0] || ''] : defaultSlots(pick));
-    // Re-open on already-applied Instant/named: treat as approved so user can edit vars.
+    setFocusedSlot(0);
     const already =
       Boolean(applied && applied.id === pick.id) ||
-      (pick.id !== 'custom' && selected.every((id) => pages.find((p) => p.pageId === id)?.utilityReady));
+      Boolean(
+        pick.instant &&
+          selected.every((id) => pages.find((p) => p.pageId === id)?.utilityReady)
+      );
     setLibraryApproved(pick.id === 'custom' || already);
     setApprovedPageCount(
       pick.id === 'custom'
@@ -172,6 +427,7 @@ export default function NewCampaignPage() {
   function selectLibraryItem(tpl: StarterTemplate) {
     if (busy) return;
     setEditing(tpl);
+    setFocusedSlot(0);
     if (tpl.id === 'custom') {
       setSlots([message || tpl.examples[0] || '']);
       setLibraryApproved(true);
@@ -180,14 +436,10 @@ export default function NewCampaignPage() {
       setSlots(defaultSlots(tpl));
       setLibraryApproved(false);
       setApprovedPageCount(0);
-      // Page Instant: clicking a card starts Meta sync/ensure immediately
-      if (selected.length) {
-        void approveLibraryTemplateFor(tpl);
-      }
+      if (selected.length) void approveLibraryTemplateFor(tpl);
     }
   }
 
-  /** Competitor-style: sync Meta templates → warm reuse or cold create+wait. */
   async function ensureUtilityApproved(tpl: StarterTemplate): Promise<{
     ready: number;
     pending: number;
@@ -208,7 +460,13 @@ export default function NewCampaignPage() {
     );
 
     const prep = await api<{
-      results: Array<{ page_id: string; status: string; error?: string; path?: string; name?: string }>;
+      results: Array<{
+        page_id: string;
+        status: string;
+        error?: string;
+        path?: string;
+        name?: string;
+      }>;
       approved?: number;
       pending?: number;
       failed?: number;
@@ -255,7 +513,6 @@ export default function NewCampaignPage() {
       };
     }
 
-    // Short backup poll (ensure-library already waited; catch worker/DB lag)
     const statusPath = `/api/broadcast/utility-status?template_name=${encodeURIComponent(metaName)}`;
     const deadline = Date.now() + 30_000;
     let pending = Math.max(0, selected.length - ready);
@@ -265,7 +522,9 @@ export default function NewCampaignPage() {
       }>(statusPath).catch(() => null);
       if (status) {
         const hits = status.pages.filter((x) => selected.includes(x.page_id));
-        ready = hits.filter((x) => x.ready || x.status === 'APPROVED' || x.status === 'approved').length;
+        ready = hits.filter(
+          (x) => x.ready || x.status === 'APPROVED' || x.status === 'approved'
+        ).length;
         pending = Math.max(0, selected.length - ready);
         setPages((prev) =>
           prev.map((p) => {
@@ -328,14 +587,7 @@ export default function NewCampaignPage() {
     }
   }
 
-  /** Step A: approve on Meta — unlocks variable editing (like Page Instant). */
-  async function approveLibraryTemplate() {
-    if (!editing) return;
-    await approveLibraryTemplateFor(editing);
-  }
-
-  /** Step B: after approve — save filled variables and continue. */
-  async function applyEditing() {
+  function applyEditing() {
     if (!editing) return;
     if (editing.id === 'custom') {
       const text = (slots[0] || '').trim();
@@ -349,12 +601,11 @@ export default function NewCampaignPage() {
       setLibraryOpen(false);
       setError('');
       setToast('Custom message applied.');
-      setStep(3);
       return;
     }
 
     if (!libraryApproved) {
-      await approveLibraryTemplate();
+      void approveLibraryTemplateFor(editing);
       return;
     }
 
@@ -373,21 +624,30 @@ export default function NewCampaignPage() {
     setToast(
       `“${editing.title}” ready — approved on ${approvedPageCount || selected.length} of ${selected.length} page${selected.length === 1 ? '' : 's'}.`
     );
-    setStep(3);
+    requestAnimationFrame(() => fillSectionRef.current?.scrollIntoView({ behavior: 'smooth' }));
   }
 
-  function insertToken(token: string) {
-    if (mode === 'custom') {
-      setMessage((m) => `${m}${m && !m.endsWith(' ') ? ' ' : ''}${token}`);
-      return;
-    }
+  function insertChip(value: string) {
     setSlots((prev) => {
       const next = [...prev];
-      const idx = next.findIndex((_, i) => applied && isNameLabel(applied.labels[i] || ''));
-      if (idx >= 0) next[idx] = token;
-      else if (next.length) next[0] = token;
+      const idx = Math.min(Math.max(focusedSlot, 0), Math.max(next.length - 1, 0));
+      if (!next.length) return [value];
+      next[idx] = value;
       return next;
     });
+  }
+
+  function updateAppliedSlot(index: number, value: string) {
+    setSlots((prev) => {
+      const next = [...prev];
+      next[index] = value;
+      return next;
+    });
+    if (applied) {
+      const next = [...slots];
+      next[index] = value;
+      setMessage(fillTemplateBody(applied.body, next));
+    }
   }
 
   async function syncSelected() {
@@ -400,10 +660,10 @@ export default function NewCampaignPage() {
           body: JSON.stringify({ page_id: pageId }),
         });
       }
-      const audience = await api<{ pages: Array<{ page_id: string; contact_count: number }> }>(
-        '/api/broadcast/audience/status'
-      );
-      const counts = new Map(audience.pages.map((p) => [p.page_id, p.contact_count]));
+      const audienceStatus = await api<{
+        pages: Array<{ page_id: string; contact_count: number }>;
+      }>('/api/broadcast/audience/status');
+      const counts = new Map(audienceStatus.pages.map((p) => [p.page_id, p.contact_count]));
       setPages((prev) =>
         prev.map((p) => ({ ...p, contactCount: counts.get(p.pageId) ?? p.contactCount }))
       );
@@ -412,93 +672,6 @@ export default function NewCampaignPage() {
       setError(err instanceof Error ? err.message : 'Sync failed');
     } finally {
       setBusy(false);
-    }
-  }
-
-  async function prepareTemplates() {
-    setBusy(true);
-    setError('');
-    try {
-      const res = await api<{
-        ok: number;
-        failed: number;
-        message?: string;
-        results: Array<{ page_id: string; page_name?: string; status: string; error?: string }>;
-      }>('/api/broadcast/prepare-instant', {
-        method: 'POST',
-        body: JSON.stringify({ page_ids: selected }),
-      });
-      const failedRows = res.results.filter((r) => r.status === 'error' || r.status === 'REJECTED');
-      if (res.ok > 0) {
-        setToast(
-          res.message ||
-            `Auto UTILITY queued on ${res.ok} Page(s) — Meta approval polled in background.`
-        );
-      }
-      if (failedRows.length) {
-        setError(
-          failedRows
-            .slice(0, 3)
-            .map((r) => `${r.page_name || r.page_id}: ${r.error || r.status}`)
-            .join(' · ')
-        );
-      }
-      // Refresh ready badges
-      const status = await api<{
-        pages: Array<{ page_id: string; ready: boolean; status: string }>;
-      }>('/api/broadcast/utility-status').catch(() => null);
-      if (status) {
-        setPages((prev) =>
-          prev.map((p) => {
-            const hit = status.pages.find((x) => x.page_id === p.pageId);
-            return hit ? { ...p, utilityReady: hit.ready, utilityStatus: hit.status } : p;
-          })
-        );
-      }
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Prepare failed. Reconnect Facebook, tick every Page, grant Utility Messaging.'
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function autoUtilityAll() {
-    setBusy(true);
-    setError('');
-    try {
-      const res = await api<{ enqueued: number; message?: string }>('/api/broadcast/auto-utility', {
-        method: 'POST',
-        body: JSON.stringify({}),
-      });
-      setToast(res.message || `Auto UTILITY queued on ${res.enqueued} Page(s).`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Auto UTILITY failed');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function goNext() {
-    setError('');
-    if (step === 1) {
-      if (!canNextFrom1) {
-        setError(hasLiveToken ? 'Select at least one Page.' : 'Reconnect Facebook before sending.');
-        return;
-      }
-      setStep(2);
-      return;
-    }
-    if (step === 2) {
-      if (!canNextFrom2) {
-        setError('Pick a template or write a custom message.');
-        openLibrary();
-        return;
-      }
-      setStep(3);
     }
   }
 
@@ -560,552 +733,350 @@ export default function NewCampaignPage() {
     pages.find((p) => selected.includes(p.pageId))?.name || pages[0]?.name || 'Your Page';
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 pb-24">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-wide text-primary">New Template Bulk Message</p>
-        <h1 className="text-2xl font-semibold">Broadcast wizard</h1>
+    <div className="mx-auto max-w-6xl pb-28">
+      <div className="mb-6">
+        <p className="text-xs font-semibold uppercase tracking-wide text-primary">New Campaign</p>
+        <h1 className="text-2xl font-semibold text-slate-900">Broadcast to Messenger</h1>
         <p className="text-sm text-slate-500">
-          Select Pages → choose &amp; edit a template → review and send
+          Select pages, pick a template, fill BODY slots, then send.
         </p>
       </div>
 
       {!hasLiveToken ? (
-        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-          Session expired / Reconnect required — Facebook account has no live user token (or Meta
-          returned no Pages). Open Reconnect → tick every Page in the Facebook picker → Continue,
-          then return here.
+        <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          Session expired / Reconnect required — Facebook account has no live user token. Open
+          Reconnect → tick every Page → Continue, then return here.
         </div>
       ) : null}
 
-      <nav className="card flex flex-wrap gap-2 p-3">
-        {STEPS.map((s) => {
-          const active = step === s.id;
-          const done = step > s.id;
-          return (
-            <button
-              key={s.id}
-              type="button"
-              className={`flex flex-1 items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition ${
-                active
-                  ? 'bg-primary text-white'
-                  : done
-                    ? 'bg-blue-50 text-primary'
-                    : 'bg-slate-50 text-slate-500'
-              }`}
-              onClick={() => {
-                if (s.id < step) setStep(s.id);
-                else if (s.id === 2 && canNextFrom1) setStep(2);
-                else if (s.id === 3 && canNextFrom1 && canNextFrom2) setStep(3);
-              }}
-            >
-              <span
-                className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold ${
-                  active ? 'bg-white/20' : done ? 'bg-primary text-white' : 'bg-white text-slate-500'
-                }`}
-              >
-                {s.id}
-              </span>
-              <span className="font-medium">{s.label}</span>
-            </button>
-          );
-        })}
-      </nav>
-
-      {step === 1 ? (
-        <section className="card space-y-4 p-6">
-          <div className="flex flex-wrap items-end justify-between gap-3">
-            <div>
-              <h2 className="font-semibold">1. Select Pages</h2>
-              <p className="text-sm text-slate-500">
-                {selected.length} of {pages.length} selected · ~{estimated.toLocaleString()} people
-              </p>
-            </div>
-            <input
-              className="input max-w-xs"
-              placeholder="Search pages…"
-              value={pageSearch}
-              onChange={(e) => setPageSearch(e.target.value)}
-            />
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => setSelected(filteredPages.map((p) => p.pageId))}
-            >
-              Select visible
-            </button>
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => setSelected(pages.map((p) => p.pageId))}
-            >
-              Select all
-            </button>
-            <button type="button" className="btn-secondary" onClick={() => setSelected([])}>
-              Clear
-            </button>
-            <button
-              type="button"
-              className="btn-secondary"
-              disabled={busy || !selected.length}
-              onClick={syncSelected}
-            >
-              Sync audience
-            </button>
-            <button
-              type="button"
-              className="btn-secondary"
-              disabled={busy || !selected.length}
-              onClick={prepareTemplates}
-            >
-              Prepare Instant UTILITY
-            </button>
-            <button
-              type="button"
-              className="btn-secondary"
-              disabled={busy}
-              onClick={autoUtilityAll}
-            >
-              Auto-approve all Pages
-            </button>
-          </div>
-
-          <div className="grid gap-2 sm:grid-cols-2">
-            {filteredPages.map((p) => {
-              const checked = selected.includes(p.pageId);
-              return (
-                <label
-                  key={p.pageId}
-                  className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition ${
-                    checked ? 'border-primary bg-blue-50/60' : 'border-slate-200 hover:border-slate-300'
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    className="mt-1"
-                    checked={checked}
-                    onChange={(e) => {
-                      setSelected((prev) =>
-                        e.target.checked ? [...prev, p.pageId] : prev.filter((id) => id !== p.pageId)
-                      );
-                    }}
-                  />
-                  <span className="min-w-0">
-                    <span className="block truncate font-medium">{p.name}</span>
-                    <span className="mt-0.5 block text-xs text-slate-500">
-                      {(p.contactCount || 0).toLocaleString()} contacts ·{' '}
-                      {p.hasPageToken === false ? 'no token' : 'token ok'}
-                      {p.utilityReady
-                        ? ' · UTILITY ready'
-                        : p.utilityStatus
-                          ? ` · UTILITY ${p.utilityStatus}`
-                          : ' · UTILITY auto…'}
-                    </span>
-                  </span>
-                </label>
-              );
-            })}
-            {!filteredPages.length ? (
-              <p className="col-span-full text-sm text-slate-500">No pages match your search.</p>
-            ) : null}
-          </div>
-        </section>
-      ) : null}
-
-      {step === 2 ? (
-        <section className="card space-y-4 p-6">
-          <div>
-            <h2 className="font-semibold">2. Choose a template</h2>
-            <p className="text-sm text-slate-500">
-              Pick from the library — Meta must approve first, then you fill the variables.
-            </p>
-          </div>
-
-          <button
-            type="button"
-            className="flex w-full items-center justify-between rounded-xl border border-dashed border-primary/40 bg-blue-50/50 px-4 py-4 text-left transition hover:bg-blue-50"
-            onClick={() => openLibrary()}
-          >
-            <span>
-              <span className="block font-semibold text-primary">Browse starter templates</span>
-              <span className="text-sm text-slate-600">
-                {applied
-                  ? `Selected: ${applied.title} · approved on ${approvedPageCount || selected.length} of ${selected.length} page${selected.length === 1 ? '' : 's'}`
-                  : mode === 'custom' && message
-                    ? 'Custom message ready — click to change'
-                    : 'Choose → Approve → Fill variables'}
-              </span>
-            </span>
-            <span className="btn-primary">Open library</span>
-          </button>
-
-          {applied && mode === 'starter' ? (
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 px-4 py-3 text-sm text-emerald-900">
-              Approved on {approvedPageCount || selected.length} of {selected.length} page
-              {selected.length === 1 ? '' : 's'}. You can edit variables in the library or continue to
-              review.
-            </div>
-          ) : null}
-
-          <div className="grid gap-4 lg:grid-cols-2">
-            <div className="space-y-3">
-              <label className="label">Message preview / edit</label>
-              <textarea
-                className="input min-h-[160px]"
-                readOnly={mode === 'starter'}
-                placeholder="Browse a starter template, or switch to Custom in the library…"
-                value={previewText}
-                onChange={(e) => {
-                  if (mode === 'custom') setMessage(e.target.value);
-                }}
+      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="space-y-8">
+          {/* 1. Pages */}
+          <section className="space-y-4">
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">1. Pages</h2>
+                <p className="text-sm text-slate-500">
+                  {selected.length} of {pages.length} selected · ~{estimated.toLocaleString()} people
+                  {quota != null ? ` · ${quota.toLocaleString()} credits` : ''}
+                </p>
+              </div>
+              <input
+                className="input max-w-xs"
+                placeholder="Search pages…"
+                value={pageSearch}
+                onChange={(e) => setPageSearch(e.target.value)}
               />
-              {mode === 'starter' ? (
-                <p className="text-xs text-slate-500">
-                  Variables are filled after approval in the library. Open library to change slots.
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setSelected(filteredPages.map((p) => p.pageId))}
+              >
+                Select visible
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setSelected(pages.map((p) => p.pageId))}
+              >
+                Select all
+              </button>
+              <button type="button" className="btn-secondary" onClick={() => setSelected([])}>
+                Clear
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={busy || !selected.length}
+                onClick={syncSelected}
+              >
+                Sync audience
+              </button>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-2">
+              {filteredPages.map((p) => {
+                const checked = selected.includes(p.pageId);
+                return (
+                  <label
+                    key={p.pageId}
+                    className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition ${
+                      checked
+                        ? 'border-primary bg-blue-50/60'
+                        : 'border-slate-200 hover:border-slate-300'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      className="mt-1"
+                      checked={checked}
+                      onChange={(e) => {
+                        setSelected((prev) =>
+                          e.target.checked
+                            ? [...prev, p.pageId]
+                            : prev.filter((id) => id !== p.pageId)
+                        );
+                      }}
+                    />
+                    <span className="min-w-0">
+                      <span className="block truncate font-medium">{p.name}</span>
+                      <span className="mt-0.5 block text-xs text-slate-500">
+                        {(p.contactCount || 0).toLocaleString()} contacts ·{' '}
+                        {p.hasPageToken === false ? 'no token' : 'token ok'}
+                        {p.utilityReady ? ' · Instant ready' : ''}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </section>
+
+          {/* 2. Audience */}
+          <section className="space-y-3">
+            <h2 className="text-lg font-semibold text-slate-900">2. Audience</h2>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {(
+                [
+                  {
+                    id: 'all' as const,
+                    title: 'All leads',
+                    hint: 'Everyone with a conversation on selected pages',
+                    enabled: true,
+                  },
+                  {
+                    id: 'label' as const,
+                    title: 'By label',
+                    hint: 'Coming soon',
+                    enabled: false,
+                  },
+                  {
+                    id: 'pick' as const,
+                    title: 'Pick leads',
+                    hint: 'Coming soon',
+                    enabled: false,
+                  },
+                ] as const
+              ).map((opt) => {
+                const active = audience === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    disabled={!opt.enabled}
+                    onClick={() => setAudience(opt.id)}
+                    className={`rounded-xl border p-4 text-left transition ${
+                      active
+                        ? 'border-primary bg-blue-50/70'
+                        : opt.enabled
+                          ? 'border-slate-200 hover:border-slate-300'
+                          : 'cursor-not-allowed border-slate-100 bg-slate-50 opacity-60'
+                    }`}
+                  >
+                    <p className="font-semibold text-slate-900">{opt.title}</p>
+                    <p className="mt-1 text-xs text-slate-500">{opt.hint}</p>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          {/* 3. Template */}
+          <section className="space-y-3">
+            <h2 className="text-lg font-semibold text-slate-900">3. Template</h2>
+            <div className="flex flex-wrap items-center gap-3">
+              <button type="button" className="btn-primary" onClick={openLibrary} disabled={!selected.length}>
+                Choose from Library
+              </button>
+              {applied ? (
+                <p className="text-sm text-slate-600">
+                  Selected: <span className="font-semibold text-slate-900">{applied.title}</span>
+                  {libraryApproved || mode === 'starter' ? (
+                    <span className="ml-2 text-emerald-700">
+                      · Approved on {approvedPageCount || selected.length} of {selected.length}
+                    </span>
+                  ) : null}
+                </p>
+              ) : mode === 'custom' && message ? (
+                <p className="text-sm text-slate-600">
+                  Selected: <span className="font-semibold">Custom message</span>
                 </p>
               ) : (
-                <div className="flex flex-wrap gap-2">
-                  {['{{first_name}}', '{{last_name}}', '{{full_name}}'].map((t) => (
-                    <button key={t} type="button" className="btn-secondary text-xs" onClick={() => insertToken(t)}>
-                      {t}
-                    </button>
-                  ))}
-                </div>
+                <p className="text-sm text-slate-500">No template selected yet.</p>
               )}
-              <div>
-                <label className="label">Optional image URL</label>
-                <input
-                  className="input"
-                  placeholder="https://…"
-                  value={imageUrl}
-                  onChange={(e) => setImageUrl(e.target.value)}
-                />
-              </div>
             </div>
+          </section>
 
-            <MessengerPreview pageName={primaryPageName} text={previewText} imageUrl={imageUrl} />
-          </div>
-        </section>
-      ) : null}
+          {/* 4. Fill BODY */}
+          <section ref={fillSectionRef} className="space-y-3">
+            <h2 className="text-lg font-semibold text-slate-900">4. Fill BODY variables</h2>
+            {mode === 'starter' && applied ? (
+              <div className="space-y-3 rounded-xl border border-slate-200 p-4">
+                {applied.labels.map((label, i) => (
+                  <label key={`${applied.id}-fill-${i}`} className="block space-y-1">
+                    <span className="text-xs font-medium text-slate-600">
+                      BODY {`{{${i + 1}}}`} · {label}
+                    </span>
+                    <input
+                      className="input w-full"
+                      value={slots[i] || ''}
+                      onFocus={() => setFocusedSlot(i)}
+                      onChange={(e) => updateAppliedSlot(i, e.target.value)}
+                    />
+                  </label>
+                ))}
+                <div>
+                  <p className="mb-2 text-xs font-medium text-slate-500">Quick fill</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {TEMPLATE_QUICK_CHIPS.map((chip) => (
+                      <button
+                        key={chip.label}
+                        type="button"
+                        className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-700 hover:border-primary hover:bg-blue-50 hover:text-primary"
+                        onClick={() => {
+                          insertChip(chip.value);
+                          if (applied) {
+                            const next = [...slots];
+                            const idx = Math.min(
+                              Math.max(focusedSlot, 0),
+                              Math.max(next.length - 1, 0)
+                            );
+                            next[idx] = chip.value;
+                            setMessage(fillTemplateBody(applied.body, next));
+                          }
+                        }}
+                      >
+                        {chip.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : mode === 'custom' ? (
+              <div className="space-y-3 rounded-xl border border-slate-200 p-4">
+                <label className="block space-y-1">
+                  <span className="text-xs font-medium text-slate-600">Your message</span>
+                  <textarea
+                    className="input min-h-[120px] w-full"
+                    value={message}
+                    onChange={(e) => setMessage(e.target.value)}
+                    placeholder="Write a custom Messenger message…"
+                  />
+                </label>
+                <label className="block space-y-1">
+                  <span className="text-xs font-medium text-slate-600">Image URL (optional)</span>
+                  <input
+                    className="input w-full"
+                    value={imageUrl}
+                    onChange={(e) => setImageUrl(e.target.value)}
+                    placeholder="https://…"
+                  />
+                </label>
+              </div>
+            ) : (
+              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                Choose a template from the library first. After Meta approval, BODY fields unlock
+                here.
+              </div>
+            )}
+          </section>
 
-      {step === 3 ? (
-        <section className="card space-y-5 p-6">
-          <div>
-            <h2 className="font-semibold">3. Review &amp; send</h2>
-            <p className="text-sm text-slate-500">Confirm audience, template, and speed — then start the campaign.</p>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <PreflightStat label="Pages" value={String(selected.length)} />
-            <PreflightStat label="Audience" value={`~${estimated.toLocaleString()}`} />
-            <PreflightStat
-              label="Template"
-              value={mode === 'custom' ? 'Custom / freeform' : applied?.title || '—'}
-            />
-            <PreflightStat
-              label="Credits"
-              value={quota !== null ? quota.toLocaleString() : '—'}
-            />
-          </div>
-
-          <div>
-            <label className="label">Send speed</label>
-            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-              {SPEED_PRESETS.map((s) => (
+          {/* 5. Review & send */}
+          <section className="space-y-4">
+            <h2 className="text-lg font-semibold text-slate-900">5. Review &amp; send</h2>
+            <div className="flex flex-wrap gap-2">
+              {SPEED_PRESETS.map((p) => (
                 <button
-                  key={s.id}
+                  key={p.id}
                   type="button"
-                  className={`rounded-lg border px-3 py-3 text-left transition ${
-                    speed === s.id
-                      ? 'border-primary bg-blue-50 ring-2 ring-primary/20'
-                      : 'border-slate-200 hover:border-slate-300'
+                  onClick={() => setSpeed(p.id)}
+                  className={`rounded-lg border px-3 py-2 text-left text-sm ${
+                    speed === p.id
+                      ? 'border-primary bg-blue-50 text-primary'
+                      : 'border-slate-200 text-slate-700'
                   }`}
-                  onClick={() => setSpeed(s.id)}
                 >
-                  <span className="block font-medium">{s.label}</span>
-                  <span className="text-xs text-slate-500">{s.hint}</span>
+                  <span className="font-medium">{p.label}</span>
+                  <span className="mt-0.5 block text-[11px] text-slate-500">{p.hint}</span>
                 </button>
               ))}
             </div>
-          </div>
+            <label className="flex items-start gap-3 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={compliance}
+                onChange={(e) => setCompliance(e.target.checked)}
+              />
+              <span>
+                I confirm this message complies with Meta messaging policies and my audience has
+                opted in to receive updates from these Pages.
+              </span>
+            </label>
+          </section>
 
-          <div className="grid gap-4 lg:grid-cols-2">
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Final message</p>
-              <pre className="whitespace-pre-wrap text-sm text-slate-800">{previewText || '—'}</pre>
-              {imageUrl ? <p className="mt-2 truncate text-xs text-slate-500">Image: {imageUrl}</p> : null}
+          {error ? (
+            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+              {error}
             </div>
-            <MessengerPreview pageName={primaryPageName} text={previewText} imageUrl={imageUrl} />
-          </div>
-        </section>
-      ) : null}
-
-      {error ? <p className="text-sm text-danger">{error}</p> : null}
-      {toast ? <p className="text-sm text-emerald-700">{toast}</p> : null}
-
-      {approveWait ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-[2px]">
-          <div className="max-w-sm rounded-2xl bg-white px-6 py-5 text-center shadow-xl">
-            <p className="text-base font-semibold text-slate-900">Approving template</p>
-            <p className="mt-2 text-sm text-slate-600">{approveWait}</p>
-            <p className="mt-3 text-xs text-slate-400">Meta decides APPROVED — usually under a minute.</p>
-          </div>
+          ) : null}
+          {toast ? (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+              {toast}
+            </div>
+          ) : null}
         </div>
-      ) : null}
 
-      <div className="fixed bottom-0 left-0 right-0 z-20 border-t border-slate-200 bg-white/95 backdrop-blur">
-        <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-4 py-3 lg:pl-72">
+        <MessengerPreview pageName={primaryPageName} text={previewText} />
+      </div>
+
+      <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-slate-600">
+            ~{estimated.toLocaleString()} recipients · {selected.length} page
+            {selected.length === 1 ? '' : 's'}
+          </p>
           <button
             type="button"
-            className="btn-secondary"
-            disabled={step === 1 || busy}
-            onClick={() => setStep((s) => (s > 1 ? ((s - 1) as 1 | 2 | 3) : s))}
+            className="btn-primary min-w-[140px]"
+            disabled={busy || !canSend}
+            onClick={send}
           >
-            Back
+            {busy ? 'Sending…' : 'Send campaign'}
           </button>
-          <div className="flex gap-2">
-            {step < 3 ? (
-              <button type="button" className="btn-primary" disabled={busy} onClick={goNext}>
-                Next
-              </button>
-            ) : (
-              <button type="button" className="btn-primary" disabled={!canSend || busy} onClick={send}>
-                {busy ? 'Starting…' : 'Send campaign'}
-              </button>
-            )}
-          </div>
         </div>
       </div>
 
-      {libraryOpen && editing ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/50 p-4">
-          <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
-            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-              <div>
-                <h3 className="font-semibold">Choose from Library</h3>
-                <p className="text-sm text-slate-500">
-                  Preview a template and pick one. If it&apos;s never been used on this page, we&apos;ll
-                  submit it to Meta and wait here for approval.
-                </p>
-              </div>
-              <button type="button" className="btn-secondary" onClick={() => setLibraryOpen(false)}>
-                Close
-              </button>
-            </div>
-
-            <div className="grid min-h-0 flex-1 lg:grid-cols-[240px_1fr]">
-              <aside className="border-b border-slate-200 p-4 lg:border-b-0 lg:border-r">
-                <input
-                  className="input mb-3"
-                  placeholder="Search templates…"
-                  value={librarySearch}
-                  onChange={(e) => setLibrarySearch(e.target.value)}
-                />
-                <div className="mb-3 flex flex-wrap gap-1">
-                  {badges.map((b) => (
-                    <button
-                      key={b}
-                      type="button"
-                      className={`rounded-full px-2.5 py-1 text-xs font-medium ${
-                        libraryFilter === b ? 'bg-primary text-white' : 'bg-slate-100 text-slate-600'
-                      }`}
-                      onClick={() => setLibraryFilter(b)}
-                    >
-                      {b}
-                    </button>
-                  ))}
-                </div>
-                <div className="max-h-[40vh] space-y-1 overflow-y-auto lg:max-h-[55vh]">
-                  {libraryItems.map((tpl) => (
-                    <button
-                      key={tpl.id + tpl.name}
-                      type="button"
-                      disabled={busy}
-                      className={`w-full rounded-lg px-3 py-2 text-left text-sm transition ${
-                        editing.id === tpl.id
-                          ? 'bg-blue-50 text-primary ring-1 ring-primary/30'
-                          : 'hover:bg-slate-50'
-                      } ${busy ? 'opacity-60' : ''}`}
-                      onClick={() => selectLibraryItem(tpl)}
-                    >
-                      <span className="block font-medium">{tpl.title}</span>
-                      <span className="text-xs text-slate-500">
-                        {tpl.badge} · {tpl.description || tpl.name}
-                        {busy && editing.id === tpl.id ? ' · Working on this one…' : ''}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </aside>
-
-              <div className="grid min-h-0 gap-4 overflow-y-auto p-5 lg:grid-cols-2">
-                <div className="space-y-4">
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                      3 · Choose template
-                    </p>
-                    <h4 className="mt-1 font-semibold">{editing.title}</h4>
-                    <p className="font-mono text-xs text-slate-500">{editing.name}</p>
-                    <p className="mt-1 text-sm text-slate-500">{editing.description}</p>
-                    {editing.id !== 'custom' ? (
-                      libraryApproved ? (
-                        <p className="mt-2 text-sm font-medium text-emerald-700">
-                          Approved on {approvedPageCount || selected.length} of {selected.length} page
-                          {selected.length === 1 ? '' : 's'}.
-                        </p>
-                      ) : busy ? (
-                        <p className="mt-2 text-sm text-amber-800">
-                          Checking template approval on this page…
-                        </p>
-                      ) : (
-                        <p className="mt-2 text-sm text-amber-800">
-                          Click a template to sync Meta and unlock variables (usually 30–60 seconds).
-                        </p>
-                      )
-                    ) : null}
-                  </div>
-
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                      Template body
-                    </p>
-                    <pre className="whitespace-pre-wrap text-sm text-slate-800">{editing.body}</pre>
-                  </div>
-
-                  {editing.id === 'custom' || libraryApproved ? (
-                    <div className="space-y-3">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                        4 · Fill the variables
-                      </p>
-                      {editing.labels.map((label, i) => (
-                        <div key={`${editing.name}-${i}`}>
-                          <label className="label">
-                            {editing.id === 'custom' ? label : `BODY {{${i + 1}}}`} · {label}
-                          </label>
-                          <input
-                            className="input"
-                            value={slots[i] || ''}
-                            placeholder={editing.examples[i] || label}
-                            onChange={(e) => {
-                              const v = e.target.value;
-                              setSlots((prev) => {
-                                const next = [...prev];
-                                next[i] = v;
-                                return next;
-                              });
-                            }}
-                          />
-                          {isNameLabel(label) ? (
-                            <div className="mt-1 flex flex-wrap gap-1">
-                              {['{{first_name}}', '{{last_name}}', '{{full_name}}'].map((t) => (
-                                <button
-                                  key={t}
-                                  type="button"
-                                  className="rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600"
-                                  onClick={() => {
-                                    setSlots((prev) => {
-                                      const next = [...prev];
-                                      next[i] = t;
-                                      return next;
-                                    });
-                                  }}
-                                >
-                                  {t}
-                                </button>
-                              ))}
-                            </div>
-                          ) : null}
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="rounded-xl border border-dashed border-slate-300 bg-white px-4 py-6 text-center text-sm text-slate-500">
-                      Variable fields unlock after Meta approval.
-                    </div>
-                  )}
-                </div>
-                <MessengerPreview
-                  pageName={primaryPageName}
-                  text={
-                    libraryApproved || editing.id === 'custom'
-                      ? fillTemplateBody(editing.body, slots)
-                      : editing.body
-                  }
-                  imageUrl={imageUrl}
-                />
-              </div>
-            </div>
-
-            <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 px-5 py-4">
-              <button type="button" className="btn-secondary" onClick={() => setLibraryOpen(false)}>
-                Cancel
-              </button>
-              {editing.id !== 'custom' && !libraryApproved ? (
-                <button
-                  type="button"
-                  className="btn-primary"
-                  disabled={busy || !selected.length}
-                  onClick={() => void approveLibraryTemplate()}
-                >
-                  {busy ? 'Approving…' : `Approve on ${selected.length} page${selected.length === 1 ? '' : 's'}`}
-                </button>
-              ) : (
-                <button type="button" className="btn-primary" disabled={busy} onClick={() => void applyEditing()}>
-                  Use this template
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function PreflightStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="mt-1 truncate text-lg font-semibold text-slate-900">{value}</p>
-    </div>
-  );
-}
-
-function MessengerPreview({
-  pageName,
-  text,
-  imageUrl,
-}: {
-  pageName: string;
-  text: string;
-  imageUrl?: string;
-}) {
-  return (
-    <div className="mx-auto w-full max-w-sm">
-      <div className="overflow-hidden rounded-[1.75rem] border border-slate-800 bg-slate-900 shadow-lg">
-        <div className="flex items-center gap-2 border-b border-slate-700 bg-slate-800 px-4 py-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-xs font-bold text-white">
-            {(pageName[0] || 'P').toUpperCase()}
-          </div>
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium text-white">{pageName}</p>
-            <p className="text-[10px] text-slate-400">Messenger · preview</p>
-          </div>
-        </div>
-        <div className="min-h-[220px] space-y-3 bg-[#eef2f7] p-4">
-          {imageUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={imageUrl} alt="" className="max-h-36 w-full rounded-xl object-cover" />
-          ) : null}
-          <div className="max-w-[85%] rounded-2xl rounded-bl-md bg-white px-3 py-2 text-sm text-slate-800 shadow-sm">
-            <p className="whitespace-pre-wrap break-words">
-              {text.trim() || 'Your message preview will appear here.'}
-            </p>
-          </div>
-        </div>
-      </div>
+      <LibraryModal
+        open={libraryOpen}
+        items={libraryItems}
+        editing={editing}
+        slots={slots}
+        busy={busy}
+        approveWait={approveWait}
+        libraryApproved={libraryApproved}
+        approvedPageCount={approvedPageCount}
+        selectedCount={selected.length}
+        focusedSlot={focusedSlot}
+        error={error}
+        onClose={() => {
+          if (!busy) setLibraryOpen(false);
+        }}
+        onSelect={selectLibraryItem}
+        onSlotChange={(index, value) => {
+          setSlots((prev) => {
+            const next = [...prev];
+            next[index] = value;
+            return next;
+          });
+        }}
+        onFocusSlot={setFocusedSlot}
+        onChip={insertChip}
+        onUseTemplate={applyEditing}
+      />
     </div>
   );
 }
