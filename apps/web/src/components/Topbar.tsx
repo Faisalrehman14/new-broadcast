@@ -27,7 +27,6 @@ export function Topbar({
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
   const [results, setResults] = useState<{
-    contacts: Array<{ id: string; name?: string }>;
     broadcasts: Array<{ id: string; name: string }>;
     templates: Array<{ id: string; title: string }>;
   } | null>(null);
@@ -56,17 +55,24 @@ export function Topbar({
       return;
     }
     const t = setTimeout(() => {
-      api<typeof results>(`/api/search?q=${encodeURIComponent(q)}`)
-        .then(setResults)
+      api<{
+        contacts?: Array<{ id: string; name?: string }>;
+        broadcasts: Array<{ id: string; name: string }>;
+        templates: Array<{ id: string; title: string }>;
+      }>(`/api/search?q=${encodeURIComponent(q)}`)
+        .then((r) =>
+          setResults({
+            broadcasts: r.broadcasts || [],
+            templates: r.templates || [],
+          })
+        )
         .catch(() => setResults(null));
     }, 250);
     return () => clearTimeout(t);
   }, [q]);
 
   const hasResults = useMemo(
-    () =>
-      results &&
-      (results.contacts.length || results.broadcasts.length || results.templates.length),
+    () => results && (results.broadcasts.length || results.templates.length),
     [results]
   );
 
@@ -105,7 +111,7 @@ export function Topbar({
         <input
           id="global-search"
           className="input pl-9"
-          placeholder="Search contacts, broadcasts, templates  ( / )"
+          placeholder="Search broadcasts, templates  ( / )"
           value={q}
           onChange={(e) => {
             setQ(e.target.value);
@@ -116,11 +122,6 @@ export function Topbar({
         />
         {open && hasResults ? (
           <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-80 overflow-auto rounded-xl border border-slate-200 bg-white p-2 shadow-card">
-            {results!.contacts.map((c) => (
-              <Link key={c.id} href={`/contacts?id=${c.id}`} className="block rounded-lg px-3 py-2 text-sm hover:bg-slate-50">
-                Contact · {c.name || c.id}
-              </Link>
-            ))}
             {results!.broadcasts.map((b) => (
               <Link key={b.id} href={`/broadcasts/${b.id}`} className="block rounded-lg px-3 py-2 text-sm hover:bg-slate-50">
                 Broadcast · {b.name}

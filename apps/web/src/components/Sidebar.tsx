@@ -10,7 +10,6 @@ import {
   Megaphone,
   Settings,
   Shield,
-  Users,
 } from 'lucide-react';
 import { messages } from '@/i18n/en';
 import { api, setCsrfToken } from '@/lib/api';
@@ -28,7 +27,6 @@ type PageItem = {
 const nav = [
   { href: '/dashboard', label: messages.nav.dashboard, icon: LayoutDashboard },
   { href: '/broadcasts', label: messages.nav.broadcasts, icon: Megaphone },
-  { href: '/contacts', label: messages.nav.contacts, icon: Users },
   { href: '/analytics', label: messages.nav.analytics, icon: BarChart3 },
   { href: '/settings', label: messages.nav.settings, icon: Settings },
   { href: '/billing', label: messages.nav.billing, icon: CreditCard },

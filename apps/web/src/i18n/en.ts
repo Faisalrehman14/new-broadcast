@@ -4,7 +4,6 @@ export const messages = {
   nav: {
     dashboard: 'Dashboard',
     broadcasts: 'Broadcasts',
-    contacts: 'Contacts',
     analytics: 'Analytics',
     settings: 'Settings',
     reconnect: 'Reconnect',
@@ -16,7 +15,6 @@ export const messages = {
     admin: 'Admin',
   },
   empty: {
-    contacts: 'No customers synced yet.',
     broadcasts: "You haven't created your first broadcast yet.",
     pages: 'Connect a Facebook Page to get started.',
   },
