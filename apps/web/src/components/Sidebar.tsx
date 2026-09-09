@@ -9,6 +9,7 @@ import {
   CreditCard,
   HelpCircle,
   LayoutDashboard,
+  Link2,
   LogOut,
   Megaphone,
   RefreshCw,
