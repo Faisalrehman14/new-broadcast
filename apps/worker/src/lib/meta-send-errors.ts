@@ -134,7 +134,7 @@ export function classifyMetaSendError(err: unknown): ClassifiedMetaSendError {
       reason: utilityAttempt ? 'utility_window_rejected' : 'outside_window',
       message: utilityAttempt
         ? 'Meta rejected UTILITY outside the 24h window. Reconnect Facebook, tick this Page in the picker, grant Utility Messaging (pages_utility_messaging), and confirm the template language (en / en_US) is APPROVED.'
-        : 'Outside the 24h messaging window — UTILITY template did not deliver. Reconnect Facebook, grant Utility Messaging for this Page, and confirm the template is APPROVED.',
+        : 'Outside the 24h messaging window (RESPONSE blocked). CastMe should fall back to UTILITY — if this still appears, Instant UTILITY is not delivering for this Page.',
       retryable: false,
       deactivateContact: false,
     };

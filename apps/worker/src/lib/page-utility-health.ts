@@ -47,7 +47,8 @@ export function grantUtilityForPage(data: DebugTokenData | null, pageId: string)
   const hit = granular.find((g) => g.scope === 'pages_utility_messaging');
   if (hit) {
     const targets = (hit.target_ids || []).map(String);
-    if (!targets.length) return true; // granted without target list
+    // Empty target list is inconclusive — do NOT treat as page-wide grant.
+    if (!targets.length) return null;
     return targets.includes(pid);
   }
   if (Array.isArray(data.scopes) && data.scopes.includes('pages_utility_messaging')) {

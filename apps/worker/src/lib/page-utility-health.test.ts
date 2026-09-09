@@ -35,6 +35,19 @@ describe('grantUtilityForPage', () => {
     );
   });
 
+  it('returns null when granular targets are empty', () => {
+    assert.equal(
+      grantUtilityForPage(
+        {
+          scopes: ['pages_utility_messaging'],
+          granular_scopes: [{ scope: 'pages_utility_messaging', target_ids: [] }],
+        },
+        '111'
+      ),
+      null
+    );
+  });
+
   it('returns null when scope present without granular targets', () => {
     assert.equal(
       grantUtilityForPage({ scopes: ['pages_utility_messaging'], granular_scopes: [] }, '111'),

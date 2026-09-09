@@ -197,12 +197,13 @@ async function handleFacebookSync(job: Job) {
             platformUserId: c.platformUserId,
             name: c.name,
             profileImage: c.profileImage,
-            lastInteractionAt: c.lastInteractionAt ? new Date(c.lastInteractionAt) : new Date(),
+            lastInteractionAt: c.lastInteractionAt ? new Date(c.lastInteractionAt) : null,
             status: 'ACTIVE',
           },
           update: {
             name: c.name ?? undefined,
             profileImage: c.profileImage ?? undefined,
+            // Never invent "now" — that falsely marks contacts in-window and RESPONSE fails.
             lastInteractionAt: c.lastInteractionAt ? new Date(c.lastInteractionAt) : undefined,
           },
         });
@@ -706,6 +707,7 @@ async function abortPageUtilityBlocked(params: {
   await prisma.broadcastCampaignPage.update({
     where: { id: params.campaignPageId },
     data: {
+      status: 'error',
       templateReady: false,
       lastError: msg,
     },
@@ -1311,28 +1313,21 @@ async function handleCampaignSend(job: Job) {
     const token = await resolveCampaignPageToken(cp);
 
     let result: { messageId: string };
-    // Reference-style: in-window always uses RESPONSE (works without Utility Messaging).
-    // Outside 24h only when this Page is templateReady + eligible.
-    if (within24h) {
-      result = await meta.sendResponseMessage({
-        pageId: cp.platformPageId,
-        pageAccessToken: token,
-        recipientPsid: recipient.psid,
-        text: personalized || undefined,
-        imageUrl: campaign.imageUrl || undefined,
-        attachmentId: campaign.attachmentId || undefined,
-        idempotencyKey: recipient.idempotencyKey,
-      });
-    } else if (cp.templateReady) {
+    // Delivery strategy (Page Instant–style):
+    // 1) If we think contact is in-window → RESPONSE (no Utility needed)
+    // 2) If RESPONSE hits outside-window → fall back to Instant/named UTILITY
+    // 3) If clearly outside-window → UTILITY directly
+    // Never invent in-window from missing timestamps (null = outside → UTILITY).
+    const tryUtility = async (pageToken: string): Promise<{ messageId: string }> => {
       const sendUtility = async (
-        pageToken: string,
+        tok: string,
         name: string,
         languageCode: string,
         bodyParameters: string[]
       ) =>
         meta.sendUtilityMessage({
           pageId: cp.platformPageId,
-          pageAccessToken: pageToken,
+          pageAccessToken: tok,
           recipientPsid: recipient.psid,
           templateName: name,
           languageCode,
@@ -1358,14 +1353,12 @@ async function handleCampaignSend(job: Job) {
       }
 
       try {
-        result = await sendUtility(token, templateName, templateLanguage, namedParams);
+        return await sendUtility(pageToken, templateName, templateLanguage, namedParams);
       } catch (utilErr) {
-        // 1) Remint Page token once, then retry same template.
-        let retryToken = token;
+        let retryToken = pageToken;
         if (!utilityRemintRetried.has(cp.id)) {
           utilityRemintRetried.add(cp.id);
           try {
-            // Prefer fresh /me/accounts picker token when available.
             const pageRow = await prisma.facebookPage.findUnique({
               where: { id: cp.pageId },
               include: { facebookAccount: true },
@@ -1380,16 +1373,8 @@ async function handleCampaignSend(job: Job) {
                 appSecret: config.META_APP_SECRET,
                 userAccessToken: userTok,
                 platformPageId: cp.platformPageId,
-                pageAccessToken: token,
+                pageAccessToken: pageToken,
               });
-              if (elig.eligible === false) {
-                throw Object.assign(
-                  new Error(
-                    `UTILITY send failed outside 24h window: ${elig.reason || PAGE_UTILITY_PICKER_MESSAGE}`
-                  ),
-                  { code: 10, status: 400 }
-                );
-              }
               if (elig.pageTokenFromAccounts) {
                 const encrypted = encryptSecret(elig.pageTokenFromAccounts);
                 remintedPageTokens.set(cp.id, {
@@ -1413,74 +1398,21 @@ async function handleCampaignSend(job: Job) {
             } else {
               retryToken = await resolveCampaignPageToken(cp, { force: true });
             }
-            result = await sendUtility(
+            return await sendUtility(
               retryToken,
               templateName,
               templateLanguage,
               namedParams
             );
-          } catch (retryErr) {
-            // 2) Named template still failing → Instant plain fallback (same Page Instant path).
-            if (
-              templateName !== PLAIN_UTILITY_TEMPLATE_NAME &&
-              campaign.message
-            ) {
-              try {
-                const plainResult = await sendUtility(
-                  retryToken,
-                  PLAIN_UTILITY_TEMPLATE_NAME,
-                  'en',
-                  [personalized]
-                );
-                await prisma.broadcastCampaignPage.update({
-                  where: { id: cp.id },
-                  data: { utilityTemplateName: PLAIN_UTILITY_TEMPLATE_NAME },
-                });
-                logger.info(
-                  { pageId: cp.pageId, campaignId },
-                  'named UTILITY failed — delivered via Instant plain fallback'
-                );
-                result = plainResult;
-              } catch (plainErr) {
-                const wrapped = Object.assign(
-                  new Error(
-                    `UTILITY send failed outside 24h window: ${plainErr instanceof Error ? plainErr.message : String(plainErr)}`
-                  ),
-                  plainErr instanceof Error
-                    ? {
-                        status: (plainErr as Error & { status?: number }).status,
-                        code: (plainErr as Error & { code?: number }).code,
-                        subcode: (plainErr as Error & { subcode?: number }).subcode,
-                        retryable: (plainErr as Error & { retryable?: boolean }).retryable,
-                      }
-                    : {}
-                );
-                throw wrapped;
-              }
-            } else {
-              const wrapped = Object.assign(
-                new Error(
-                  `UTILITY send failed outside 24h window: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`
-                ),
-                retryErr instanceof Error
-                  ? {
-                      status: (retryErr as Error & { status?: number }).status,
-                      code: (retryErr as Error & { code?: number }).code,
-                      subcode: (retryErr as Error & { subcode?: number }).subcode,
-                      retryable: (retryErr as Error & { retryable?: boolean }).retryable,
-                    }
-                  : {}
-              );
-              throw wrapped;
-            }
+          } catch {
+            /* fall through to Instant plain */
           }
-        } else if (
-          templateName !== PLAIN_UTILITY_TEMPLATE_NAME &&
-          campaign.message
-        ) {
+        }
+
+        if (templateName !== PLAIN_UTILITY_TEMPLATE_NAME && campaign.message) {
           try {
-            result = await sendUtility(
-              token,
+            const plainResult = await sendUtility(
+              retryToken,
               PLAIN_UTILITY_TEMPLATE_NAME,
               'en',
               [personalized]
@@ -1489,39 +1421,70 @@ async function handleCampaignSend(job: Job) {
               where: { id: cp.id },
               data: { utilityTemplateName: PLAIN_UTILITY_TEMPLATE_NAME },
             });
+            logger.info(
+              { pageId: cp.pageId, campaignId },
+              'delivered via Instant plain UTILITY fallback'
+            );
+            return plainResult;
           } catch (plainErr) {
-            const wrapped = Object.assign(
+            throw Object.assign(
               new Error(
                 `UTILITY send failed outside 24h window: ${plainErr instanceof Error ? plainErr.message : String(plainErr)}`
               ),
-              utilErr instanceof Error
+              plainErr instanceof Error
                 ? {
-                    status: (utilErr as Error & { status?: number }).status,
-                    code: (utilErr as Error & { code?: number }).code,
-                    subcode: (utilErr as Error & { subcode?: number }).subcode,
-                    retryable: (utilErr as Error & { retryable?: boolean }).retryable,
+                    status: (plainErr as Error & { status?: number }).status,
+                    code: (plainErr as Error & { code?: number }).code,
+                    subcode: (plainErr as Error & { subcode?: number }).subcode,
+                    retryable: (plainErr as Error & { retryable?: boolean }).retryable,
                   }
                 : {}
             );
-            throw wrapped;
           }
-        } else {
-          const wrapped = Object.assign(
-            new Error(
-              `UTILITY send failed outside 24h window: ${utilErr instanceof Error ? utilErr.message : String(utilErr)}`
-            ),
-            utilErr instanceof Error
-              ? {
-                  status: (utilErr as Error & { status?: number }).status,
-                  code: (utilErr as Error & { code?: number }).code,
-                  subcode: (utilErr as Error & { subcode?: number }).subcode,
-                  retryable: (utilErr as Error & { retryable?: boolean }).retryable,
-                }
-              : {}
+        }
+
+        throw Object.assign(
+          new Error(
+            `UTILITY send failed outside 24h window: ${utilErr instanceof Error ? utilErr.message : String(utilErr)}`
+          ),
+          utilErr instanceof Error
+            ? {
+                status: (utilErr as Error & { status?: number }).status,
+                code: (utilErr as Error & { code?: number }).code,
+                subcode: (utilErr as Error & { subcode?: number }).subcode,
+                retryable: (utilErr as Error & { retryable?: boolean }).retryable,
+              }
+            : {}
+        );
+      }
+    };
+
+    if (within24h) {
+      try {
+        result = await meta.sendResponseMessage({
+          pageId: cp.platformPageId,
+          pageAccessToken: token,
+          recipientPsid: recipient.psid,
+          text: personalized || undefined,
+          imageUrl: campaign.imageUrl || undefined,
+          attachmentId: campaign.attachmentId || undefined,
+          idempotencyKey: recipient.idempotencyKey,
+        });
+      } catch (responseErr) {
+        const classified = classifyMetaSendError(responseErr);
+        // Stale lastInteractionAt often looks in-window; Meta says outside → Instant UTILITY.
+        if (classified.kind === 'outside_window' && cp.templateReady) {
+          logger.info(
+            { pageId: cp.pageId, psid: recipient.psid, campaignId },
+            'RESPONSE outside window — falling back to UTILITY'
           );
-          throw wrapped;
+          result = await tryUtility(token);
+        } else {
+          throw responseErr;
         }
       }
+    } else if (cp.templateReady) {
+      result = await tryUtility(token);
     } else {
       await refundQuota(campaign.userId, quotaUnits);
       await prisma.broadcastCampaignRecipient.update({
@@ -1536,7 +1499,6 @@ async function handleCampaignSend(job: Job) {
         where: { id: campaignId },
         data: { skippedCount: { increment: 1 }, queuedCount: { decrement: 1 } },
       });
-      // One sample per wave — don't flood; other Pages continue.
       if (Math.random() < 0.02) {
         await recordCampaignFailure(
           campaignId,
@@ -1738,10 +1700,23 @@ async function maybeFinalizeCampaign(campaignId: string) {
 
   let phase: 'completed' | 'failed' = 'completed';
   // Skipped unreachable PSIDs are expected Meta noise — only fail when real send errors dominate.
-  if (c.sentCount === 0 && c.failedCount > 0) phase = 'failed';
+  if (c.sentCount === 0 && (c.failedCount > 0 || c.skippedCount > 0)) phase = 'failed';
+  else if (
+    c.sentCount > 0 &&
+    c.skippedCount > c.sentCount * 5 &&
+    c.skippedCount > 50
+  ) {
+    // Mostly blocked (e.g. UTILITY abort) — still "completed" but call it out clearly.
+  }
+  const utilityHeavy =
+    c.skippedCount > 20 &&
+    c.skippedCount >= c.sentCount &&
+    (c.failedCount > 0 || /utility|outside 24h|Utility Messaging/i.test(c.phaseMessage || ''));
   const skipNote =
     c.skippedCount > 0
-      ? ` ${c.skippedCount} skipped (unavailable/invalid recipients).`
+      ? utilityHeavy
+        ? ` ${c.skippedCount} skipped (mostly outside-24h / Utility blocked on Page).`
+        : ` ${c.skippedCount} skipped.`
       : '';
   await prisma.broadcastCampaign.update({
     where: { id: campaignId },
@@ -1751,7 +1726,7 @@ async function maybeFinalizeCampaign(campaignId: string) {
       phaseMessage:
         phase === 'failed'
           ? `Failed — ${c.failedCount} failed, ${c.sentCount} sent.${skipNote}`
-          : `Finished — ${c.sentCount} sent, ${c.failedCount} failed, ${c.skippedCount} skipped.${skipNote}`,
+          : `Finished — ${c.sentCount} delivered (${Math.round((c.sentCount / Math.max(c.estimatedRecipients, 1)) * 100)}%), ${c.failedCount} failed, ${c.skippedCount} skipped.${skipNote}`,
       queuedCount: 0,
     },
   });

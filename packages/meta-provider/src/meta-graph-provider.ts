@@ -417,28 +417,57 @@ export class MetaGraphProvider implements MetaProvider {
           },
         ]
       : [];
-    // Meta may store the template as `en` or `en_US` — try both (reference campaign engine).
-    // IMPORTANT: Do NOT abort on bare "OAuthException" — Meta puts that type on almost every
-    // Graph error (including outside-window / wrong language), which previously skipped lang fallbacks.
+    // Meta may store the template as `en` or `en_US` — try both.
+    // Prefer official JSON POST first, then form-urlencoded (compat with older Page tools).
     const langs = Array.from(
-      new Set([input.languageCode || 'en_US', 'en_US', 'en'].filter(Boolean).map(String))
+      new Set([input.languageCode || 'en', 'en', 'en_US'].filter(Boolean).map(String))
     );
+    const recipientId = String(input.recipientPsid || '')
+      .trim()
+      .replace(/^t_/, '');
     let lastErr: unknown;
     for (const lang of langs) {
-      const message = {
+      const templateMessage = {
         template: {
           name: input.templateName,
           language: { code: lang },
           components,
         },
       };
+      // 1) Official JSON Graph send
+      try {
+        return await this.postMessage(
+          input.pageId,
+          input.pageAccessToken,
+          {
+            recipient: { id: recipientId },
+            messaging_type: 'UTILITY',
+            message: templateMessage,
+          },
+          `${input.idempotencyKey}:${lang}:json`
+        );
+      } catch (err) {
+        lastErr = err;
+        const text = err instanceof Error ? err.message : String(err);
+        if (
+          /"code"\s*:\s*190\b|\(#190\)|session has expired|error validating access token/i.test(
+            text
+          )
+        ) {
+          throw err;
+        }
+        if (/"code"\s*:\s*(4|17|32|613)\b|rate limit|code.: ?(4|17)\b/i.test(text)) {
+          throw err;
+        }
+      }
+      // 2) Form-urlencoded (+ optional messaging_product=facebook)
       for (const mode of ['omit_product', 'facebook'] as const) {
         try {
           return await this.postMessageForm(
             input.pageId,
             input.pageAccessToken,
-            input.recipientPsid,
-            message,
+            recipientId,
+            templateMessage,
             'UTILITY',
             `${input.idempotencyKey}:${lang}:${mode}`,
             undefined,

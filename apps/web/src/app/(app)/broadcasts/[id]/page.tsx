@@ -90,16 +90,15 @@ export default function CampaignDetailPage() {
     }
   }
 
+  const processed =
+    campaign.sentCount + campaign.failedCount + campaign.skippedCount;
   const percent =
     campaign.estimatedRecipients > 0
-      ? Math.min(
-          100,
-          Math.round(
-            ((campaign.sentCount + campaign.failedCount + campaign.skippedCount) /
-              campaign.estimatedRecipients) *
-              100
-          )
-        )
+      ? Math.min(100, Math.round((processed / campaign.estimatedRecipients) * 100))
+      : 0;
+  const successPercent =
+    campaign.estimatedRecipients > 0
+      ? Math.min(100, Math.round((campaign.sentCount / campaign.estimatedRecipients) * 100))
       : 0;
 
   return (
@@ -172,11 +171,28 @@ export default function CampaignDetailPage() {
       <div className="card p-5">
         <div className="flex justify-between text-sm">
           <span className="font-semibold">Progress</span>
-          <span className="text-slate-500">{percent}%</span>
+          <span className="text-slate-500">
+            {processed.toLocaleString()} / {campaign.estimatedRecipients.toLocaleString()} processed
+            · {successPercent}% delivered
+          </span>
         </div>
         <div className="mt-3 h-3 overflow-hidden rounded-full bg-slate-100">
-          <div className="h-full bg-primary transition-all" style={{ width: `${percent}%` }} />
+          <div
+            className="h-full bg-emerald-500 transition-all"
+            style={{ width: `${successPercent}%` }}
+            title="Successfully delivered"
+          />
         </div>
+        <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
+          <div
+            className="h-full bg-slate-400 transition-all"
+            style={{ width: `${percent}%` }}
+            title="Processed (sent + failed + skipped)"
+          />
+        </div>
+        <p className="mt-3 text-xs text-slate-500">
+          Green = delivered · Grey = processed (includes failed/skipped)
+        </p>
         <p className="mt-3 text-xs text-slate-500">
           Speed {campaign.speedPreset} · {campaign.delayMs}ms delay · quota est.{' '}
           {campaign.estimatedQuota}
