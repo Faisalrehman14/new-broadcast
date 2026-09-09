@@ -91,17 +91,27 @@ export function Sidebar({
         )}
         aria-label="Main navigation"
       >
-        <div className="flex items-center gap-3 border-b border-slate-100 px-5 py-4">
-          <BrandLogo size={40} className="h-10 w-10 shrink-0" />
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold tracking-tight text-dark">
-              {messages.appName}
-            </p>
-            <p className="text-xs text-slate-400">Broadcast workspace</p>
+        <div className="border-b border-slate-100 px-4 py-4">
+          <div className="flex items-center gap-3">
+            <BrandLogo size={40} className="h-10 w-10 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-semibold tracking-tight text-dark">
+                {messages.appName}
+              </p>
+              <p className="truncate text-xs text-slate-400">{userName}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void logout()}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:border-slate-300 hover:bg-slate-50"
+              title={messages.actions.logout}
+            >
+              <LogOut className="h-3.5 w-3.5" aria-hidden />
+              {messages.actions.logout}
+            </button>
           </div>
         </div>
 
-        {/* Workspace snapshot — replaces Active Page picker */}
         <div className="border-b border-slate-100 px-4 py-3">
           <p className="section-label">Workspace</p>
           <div className="mt-2 rounded-xl bg-slate-50 px-3 py-2.5">
@@ -141,7 +151,7 @@ export function Sidebar({
           </div>
         </div>
 
-        <nav className="space-y-0.5 overflow-y-auto px-3 py-3">
+        <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-3 py-3">
           {nav.map((item) => {
             const Icon = item.icon;
             const activeNav =
@@ -188,26 +198,8 @@ export function Sidebar({
               {messages.nav.admin}
             </Link>
           ) : null}
-        </nav>
 
-        {/* Account + logout sit directly under nav (not pushed to screen bottom) */}
-        <div className="space-y-2 border-t border-slate-100 px-4 py-3">
-          <div className="flex items-center justify-between gap-2">
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium text-slate-900">{userName}</p>
-              <p className="text-[11px] text-slate-400">Signed in</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => void logout()}
-              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-              title={messages.actions.logout}
-            >
-              <LogOut className="h-3.5 w-3.5" aria-hidden />
-              {messages.actions.logout}
-            </button>
-          </div>
-          <div className="flex flex-wrap gap-x-3 gap-y-1">
+          <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 border-t border-slate-100 px-1 pt-3">
             <Link
               href="/reconnect"
               onClick={onClose}
@@ -223,7 +215,7 @@ export function Sidebar({
               Support
             </Link>
           </div>
-        </div>
+        </nav>
       </aside>
     </>
   );
