@@ -60,6 +60,9 @@ export default function NewCampaignPage() {
   const [speed, setSpeed] = useState<SpeedId>('balanced');
   const [busy, setBusy] = useState(false);
   const [approveWait, setApproveWait] = useState<string | null>(null);
+  /** Competitor-style: Meta approve first, then unlock variable editing. */
+  const [libraryApproved, setLibraryApproved] = useState(false);
+  const [approvedPageCount, setApprovedPageCount] = useState(0);
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
 
@@ -153,6 +156,16 @@ export default function NewCampaignPage() {
     const pick = preselect || editing || applied || starters[0] || CUSTOM_STARTER;
     setEditing(pick);
     setSlots(pick.id === 'custom' ? [message || pick.examples[0] || ''] : defaultSlots(pick));
+    // Re-open on already-applied Instant/named: treat as approved so user can edit vars.
+    const already =
+      Boolean(applied && applied.id === pick.id) ||
+      (pick.id !== 'custom' && selected.every((id) => pages.find((p) => p.pageId === id)?.utilityReady));
+    setLibraryApproved(pick.id === 'custom' || already);
+    setApprovedPageCount(
+      pick.id === 'custom'
+        ? selected.length
+        : selected.filter((id) => pages.find((p) => p.pageId === id)?.utilityReady).length
+    );
     setLibraryOpen(true);
   }
 
@@ -160,8 +173,12 @@ export default function NewCampaignPage() {
     setEditing(tpl);
     if (tpl.id === 'custom') {
       setSlots([message || tpl.examples[0] || '']);
+      setLibraryApproved(true);
+      setApprovedPageCount(selected.length);
     } else {
       setSlots(defaultSlots(tpl));
+      setLibraryApproved(false);
+      setApprovedPageCount(0);
     }
   }
 
@@ -210,6 +227,7 @@ export default function NewCampaignPage() {
             return hit ? { ...p, utilityReady: hit.ready, utilityStatus: hit.status } : p;
           })
         );
+        setApprovedPageCount(ready);
         if (ready >= selected.length) break;
       }
       await new Promise((r) => setTimeout(r, 2500));
@@ -217,6 +235,44 @@ export default function NewCampaignPage() {
     return { ready, pending };
   }
 
+  /** Step A: approve on Meta — unlocks variable editing (like Page Instant). */
+  async function approveLibraryTemplate() {
+    if (!editing || editing.id === 'custom') {
+      setLibraryApproved(true);
+      return;
+    }
+    if (!selected.length) {
+      setError('Select at least one Page before approving.');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setApproveWait('Approving template on Meta — please wait up to 1 minute…');
+    try {
+      const { ready, pending } = await ensureUtilityApproved(editing);
+      setApprovedPageCount(ready);
+      if (ready > 0) {
+        setLibraryApproved(true);
+        setToast(
+          pending === 0
+            ? `Approved on ${ready} of ${selected.length} page${selected.length === 1 ? '' : 's'}.`
+            : `Approved on ${ready} of ${selected.length} pages — ${pending} still pending.`
+        );
+      } else {
+        setLibraryApproved(false);
+        setError(
+          'Meta has not approved UTILITY yet. Reconnect Facebook, grant Utility Messaging, then try again.'
+        );
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Template approval failed');
+    } finally {
+      setApproveWait(null);
+      setBusy(false);
+    }
+  }
+
+  /** Step B: after approve — save filled variables and continue. */
   async function applyEditing() {
     if (!editing) return;
     if (editing.id === 'custom') {
@@ -234,40 +290,28 @@ export default function NewCampaignPage() {
       setStep(3);
       return;
     }
+
+    if (!libraryApproved) {
+      await approveLibraryTemplate();
+      return;
+    }
+
     const values = editing.labels.map((_, i) => slots[i]?.trim() || editing.examples[i] || '');
     if (values.some((v) => !v)) {
       setError('Fill every template field before continuing.');
       return;
     }
 
-    setBusy(true);
+    setMode('starter');
+    setApplied(editing);
+    setSlots(values);
+    setMessage(fillTemplateBody(editing.body, values));
+    setLibraryOpen(false);
     setError('');
-    setApproveWait('Approving template on Meta — please wait up to 1 minute…');
-    try {
-      const { ready, pending } = await ensureUtilityApproved(editing);
-      setMode('starter');
-      setApplied(editing);
-      setSlots(values);
-      setMessage(fillTemplateBody(editing.body, values));
-      setLibraryOpen(false);
-      if (ready > 0 && pending === 0) {
-        setToast(`“${editing.title}” approved — ready to send.`);
-      } else if (ready > 0) {
-        setToast(
-          `“${editing.title}” applied. UTILITY ready on ${ready} Page(s); ${pending} still approving in background.`
-        );
-      } else {
-        setToast(
-          `“${editing.title}” applied. Meta is still approving UTILITY — sends outside 24h wait until APPROVED.`
-        );
-      }
-      setStep(3);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Template approval failed');
-    } finally {
-      setApproveWait(null);
-      setBusy(false);
-    }
+    setToast(
+      `“${editing.title}” ready — approved on ${approvedPageCount || selected.length} of ${selected.length} page${selected.length === 1 ? '' : 's'}.`
+    );
+    setStep(3);
   }
 
   function insertToken(token: string) {
@@ -611,9 +655,9 @@ export default function NewCampaignPage() {
       {step === 2 ? (
         <section className="card space-y-4 p-6">
           <div>
-            <h2 className="font-semibold">2. Choose &amp; edit template</h2>
+            <h2 className="font-semibold">2. Choose a template</h2>
             <p className="text-sm text-slate-500">
-              Browse the starter library, fill labeled fields, or write a custom freeform message.
+              Pick from the library — Meta must approve first, then you fill the variables.
             </p>
           </div>
 
@@ -626,14 +670,22 @@ export default function NewCampaignPage() {
               <span className="block font-semibold text-primary">Browse starter templates</span>
               <span className="text-sm text-slate-600">
                 {applied
-                  ? `Selected: ${applied.title}`
+                  ? `Selected: ${applied.title} · approved on ${approvedPageCount || selected.length} of ${selected.length} page${selected.length === 1 ? '' : 's'}`
                   : mode === 'custom' && message
                     ? 'Custom message ready — click to change'
-                    : 'Open library · edit slots · live preview'}
+                    : 'Choose → Approve → Fill variables'}
               </span>
             </span>
             <span className="btn-primary">Open library</span>
           </button>
+
+          {applied && mode === 'starter' ? (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 px-4 py-3 text-sm text-emerald-900">
+              Approved on {approvedPageCount || selected.length} of {selected.length} page
+              {selected.length === 1 ? '' : 's'}. You can edit variables in the library or continue to
+              review.
+            </div>
+          ) : null}
 
           <div className="grid gap-4 lg:grid-cols-2">
             <div className="space-y-3">
@@ -649,8 +701,7 @@ export default function NewCampaignPage() {
               />
               {mode === 'starter' ? (
                 <p className="text-xs text-slate-500">
-                  Named UTILITY templates are edited via labeled fields in the library. Open library to
-                  change slots.
+                  Variables are filled after approval in the library. Open library to change slots.
                 </p>
               ) : (
                 <div className="flex flex-wrap gap-2">
@@ -772,7 +823,9 @@ export default function NewCampaignPage() {
             <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
               <div>
                 <h3 className="font-semibold">Starter templates</h3>
-                <p className="text-sm text-slate-500">Pick a template, edit fields, preview, then use it.</p>
+                <p className="text-sm text-slate-500">
+                  Choose a template → approve on your Pages → then fill variables.
+                </p>
               </div>
               <button type="button" className="btn-secondary" onClick={() => setLibraryOpen(false)}>
                 Close
@@ -807,7 +860,7 @@ export default function NewCampaignPage() {
                       key={tpl.id + tpl.name}
                       type="button"
                       className={`w-full rounded-lg px-3 py-2 text-left text-sm transition ${
-                        editing.name === tpl.name
+                        editing.id === tpl.id
                           ? 'bg-blue-50 text-primary ring-1 ring-primary/30'
                           : 'hover:bg-slate-50'
                       }`}
@@ -823,65 +876,117 @@ export default function NewCampaignPage() {
               </aside>
 
               <div className="grid min-h-0 gap-4 overflow-y-auto p-5 lg:grid-cols-2">
-                <div className="space-y-3">
+                <div className="space-y-4">
                   <div>
-                    <h4 className="font-semibold">{editing.title}</h4>
-                    <p className="text-sm text-slate-500">{editing.description}</p>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      3 · Choose template
+                    </p>
+                    <h4 className="mt-1 font-semibold">{editing.title}</h4>
+                    <p className="font-mono text-xs text-slate-500">{editing.name}</p>
+                    <p className="mt-1 text-sm text-slate-500">{editing.description}</p>
+                    {editing.id !== 'custom' ? (
+                      libraryApproved ? (
+                        <p className="mt-2 text-sm font-medium text-emerald-700">
+                          Approved on {approvedPageCount || selected.length} of {selected.length} page
+                          {selected.length === 1 ? '' : 's'}.
+                        </p>
+                      ) : (
+                        <p className="mt-2 text-sm text-amber-800">
+                          Approve on your selected Pages first — then you can edit variables.
+                        </p>
+                      )
+                    ) : null}
                   </div>
-                  {editing.labels.map((label, i) => (
-                    <div key={`${editing.name}-${i}`}>
-                      <label className="label">{label}</label>
-                      <input
-                        className="input"
-                        value={slots[i] || ''}
-                        placeholder={editing.examples[i] || label}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          setSlots((prev) => {
-                            const next = [...prev];
-                            next[i] = v;
-                            return next;
-                          });
-                        }}
-                      />
-                      {isNameLabel(label) ? (
-                        <div className="mt-1 flex flex-wrap gap-1">
-                          {['{{first_name}}', '{{last_name}}', '{{full_name}}'].map((t) => (
-                            <button
-                              key={t}
-                              type="button"
-                              className="rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600"
-                              onClick={() => {
-                                setSlots((prev) => {
-                                  const next = [...prev];
-                                  next[i] = t;
-                                  return next;
-                                });
-                              }}
-                            >
-                              {t}
-                            </button>
-                          ))}
+
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      Template body
+                    </p>
+                    <pre className="whitespace-pre-wrap text-sm text-slate-800">{editing.body}</pre>
+                  </div>
+
+                  {editing.id === 'custom' || libraryApproved ? (
+                    <div className="space-y-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                        4 · Fill the variables
+                      </p>
+                      {editing.labels.map((label, i) => (
+                        <div key={`${editing.name}-${i}`}>
+                          <label className="label">
+                            {editing.id === 'custom' ? label : `BODY {{${i + 1}}}`} · {label}
+                          </label>
+                          <input
+                            className="input"
+                            value={slots[i] || ''}
+                            placeholder={editing.examples[i] || label}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setSlots((prev) => {
+                                const next = [...prev];
+                                next[i] = v;
+                                return next;
+                              });
+                            }}
+                          />
+                          {isNameLabel(label) ? (
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {['{{first_name}}', '{{last_name}}', '{{full_name}}'].map((t) => (
+                                <button
+                                  key={t}
+                                  type="button"
+                                  className="rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600"
+                                  onClick={() => {
+                                    setSlots((prev) => {
+                                      const next = [...prev];
+                                      next[i] = t;
+                                      return next;
+                                    });
+                                  }}
+                                >
+                                  {t}
+                                </button>
+                              ))}
+                            </div>
+                          ) : null}
                         </div>
-                      ) : null}
+                      ))}
                     </div>
-                  ))}
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-slate-300 bg-white px-4 py-6 text-center text-sm text-slate-500">
+                      Variable fields unlock after Meta approval.
+                    </div>
+                  )}
                 </div>
                 <MessengerPreview
                   pageName={primaryPageName}
-                  text={fillTemplateBody(editing.body, slots)}
+                  text={
+                    libraryApproved || editing.id === 'custom'
+                      ? fillTemplateBody(editing.body, slots)
+                      : editing.body
+                  }
                   imageUrl={imageUrl}
                 />
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
+            <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 px-5 py-4">
               <button type="button" className="btn-secondary" onClick={() => setLibraryOpen(false)}>
                 Cancel
               </button>
-              <button type="button" className="btn-primary" disabled={busy} onClick={() => void applyEditing()}>
-                {busy ? 'Approving…' : 'Use this template'}
-              </button>
+              {editing.id !== 'custom' && !libraryApproved ? (
+                <button
+                  type="button"
+                  className="btn-primary"
+                  disabled={busy || !selected.length}
+                  onClick={() => void approveLibraryTemplate()}
+                >
+                  {busy ? 'Approving…' : `Approve on ${selected.length} page${selected.length === 1 ? '' : 's'}`}
+                </button>
+              ) : (
+                <button type="button" className="btn-primary" disabled={busy} onClick={() => void applyEditing()}>
+                  Use this template
+                </button>
+              )}
             </div>
           </div>
         </div>
