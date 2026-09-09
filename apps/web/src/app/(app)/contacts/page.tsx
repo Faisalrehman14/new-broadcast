@@ -63,8 +63,9 @@ export default function ContactsPage() {
         />
         <select className="input max-w-[180px]" value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="">All statuses</option>
-          <option value="ACTIVE">Active</option>
+          <option value="ACTIVE">Reachable</option>
           <option value="INACTIVE">Inactive</option>
+          <option value="BLOCKED">Blocked</option>
         </select>
       </div>
 

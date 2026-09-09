@@ -218,7 +218,9 @@ async function handleFacebookSync(job: Job) {
       });
     }
 
-    const contactCount = await prisma.contact.count({ where: { pageId } });
+    const contactCount = await prisma.contact.count({
+      where: { pageId, status: 'ACTIVE' },
+    });
     await prisma.syncJob.update({
       where: { id: syncJobId },
       data: {
@@ -237,7 +239,7 @@ async function handleFacebookSync(job: Job) {
         healthStatus: 'Connected',
       },
     });
-    await notify(userId, 'SYNC_COMPLETED', 'Sync completed', `Synced ${processed} contacts.`);
+    await notify(userId, 'SYNC_COMPLETED', 'Sync completed', `Synced ${processed} contacts · ${contactCount} reachable.`);
     await prisma.auditLog.create({
       data: {
         actorId: userId,
@@ -316,7 +318,9 @@ async function handleWebhook(job: Job) {
         });
       }
 
-      const count = await prisma.contact.count({ where: { pageId: page.id } });
+      const count = await prisma.contact.count({
+        where: { pageId: page.id, status: 'ACTIVE' },
+      });
       await prisma.pageConnection.updateMany({
         where: { pageId: page.id },
         data: { lastWebhookAt: new Date(), contactCount: count },
@@ -1567,6 +1571,13 @@ async function handleCampaignSend(job: Job) {
           data: {
             status: classified.kind === 'recipient_unavailable' ? 'BLOCKED' : 'INACTIVE',
           },
+        });
+        const activeLeft = await prisma.contact.count({
+          where: { pageId: cp.pageId, status: 'ACTIVE' },
+        });
+        await prisma.pageConnection.updateMany({
+          where: { pageId: cp.pageId },
+          data: { contactCount: activeLeft },
         });
       }
       await prisma.$transaction([

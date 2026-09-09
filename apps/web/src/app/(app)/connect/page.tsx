@@ -8,23 +8,23 @@ import { BrandLogo } from '@/components/BrandLogo';
 
 const ERROR_COPY: Record<string, string> = {
   denied:
-    'Facebook authorization was cancelled (or Business Login finished without a business selected). Click Connect again → choose your Business → tick EVERY Page you send from → enable Utility Messaging → Continue (do not Cancel).',
+    'Facebook authorization was cancelled. Click Connect again → choose your Business → tick EVERY Page you send from → enable Utility Messaging → Continue.',
   invalid_state: 'Your connect session expired. Click Connect Facebook again.',
   expired:
     'Your stored Facebook access token is invalid. Click Connect Facebook again and approve all permissions.',
   token:
-    'Facebook code→token exchange failed. In Railway set META_REDIRECT_URI exactly to https://pagebroadcastweb-production.up.railway.app/api/facebook/callback and add the same URI under Meta → Facebook Login → Valid OAuth Redirect URIs. Also verify META_APP_ID / META_APP_SECRET.',
+    'Facebook could not finish login (token exchange failed). Confirm Meta App ID, App Secret, and the OAuth redirect URI match exactly in Meta Developer settings, then reconnect.',
   secret:
-    'META_APP_SECRET looks wrong. Copy a fresh App Secret from Meta → Settings → Basic, set it on the API service, redeploy, then reconnect.',
+    'The Facebook App Secret looks wrong. Update it in your server settings from Meta → Settings → Basic, then reconnect.',
   redirect:
-    'OAuth redirect_uri mismatch. META_REDIRECT_URI and Meta Valid OAuth Redirect URIs must match exactly (no trailing slash).',
+    'OAuth redirect URI mismatch. The server redirect URI and Meta Valid OAuth Redirect URIs must match exactly (no trailing slash).',
   long_lived:
-    'Long-lived token exchange failed — usually wrong META_APP_SECRET. Fix the secret, redeploy API, then reconnect.',
+    'Long-lived token exchange failed — usually a wrong App Secret. Fix the secret, restart the API, then reconnect.',
   profile:
-    'Could not finish Facebook login (profile id missing). Click Connect again, select your Business, tick every Page, allow all permissions including public_profile, then Continue — do not Cancel. If the app is in Development mode, your Facebook user must be an App admin/tester.',
-  config: 'Server encryption/config error. Check ENCRYPTION_KEY on the API service.',
+    'Could not finish Facebook login. Click Connect again, select your Business, tick every Page, allow all permissions, then Continue.',
+  config: 'Server configuration error. Check encryption settings on the API service.',
   facebook:
-    'Facebook connect failed. Check META_APP_ID, META_APP_SECRET, META_REDIRECT_URI, and Meta Valid OAuth Redirect URIs, then reconnect.',
+    'Facebook connect failed. Verify App ID, App Secret, and OAuth redirect URI, then reconnect.',
 };
 
 function ConnectInner() {

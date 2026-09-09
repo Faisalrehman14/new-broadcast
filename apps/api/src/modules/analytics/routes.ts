@@ -18,22 +18,28 @@ export async function analyticsRoutes(app: FastifyInstance) {
     const user = await requireUser(request);
     const query = analyticsQuerySchema.parse(request.query);
     const { start, end } = rangeToDates(query.range, query.from, query.to);
-    const pageFilter = query.pageId ? { pageId: query.pageId } : {};
 
-    const broadcasts = await prisma.broadcast.findMany({
+    const campaigns = await prisma.broadcastCampaign.findMany({
       where: {
         userId: user.id,
-        ...pageFilter,
+        dismissedAt: null,
         createdAt: { gte: start, lte: end },
+        ...(query.pageId
+          ? { pages: { some: { pageId: query.pageId } } }
+          : {}),
       },
+      include: {
+        pages: { select: { pageName: true, pageId: true, sentCount: true, failedCount: true } },
+      },
+      orderBy: { createdAt: 'asc' },
     });
 
-    const totalBroadcasts = broadcasts.length;
-    const totalRecipients = broadcasts.reduce((s, b) => s + b.totalRecipients, 0);
-    const sent = broadcasts.reduce((s, b) => s + b.sentCount, 0);
-    const delivered = broadcasts.reduce((s, b) => s + b.deliveredCount, 0);
-    const failed = broadcasts.reduce((s, b) => s + b.failedCount, 0);
-    const responses = broadcasts.reduce((s, b) => s + b.responseCount, 0);
+    const totalBroadcasts = campaigns.length;
+    const totalRecipients = campaigns.reduce((s, c) => s + c.estimatedRecipients, 0);
+    const sent = campaigns.reduce((s, c) => s + c.sentCount, 0);
+    const failed = campaigns.reduce((s, c) => s + c.failedCount, 0);
+    const skipped = campaigns.reduce((s, c) => s + c.skippedCount, 0);
+    const processed = sent + failed + skipped;
 
     const pageIds = (
       await prisma.pageConnection.findMany({
@@ -42,36 +48,55 @@ export async function analyticsRoutes(app: FastifyInstance) {
       })
     ).map((p) => p.pageId);
 
-    const contactGrowth = await prisma.contact.groupBy({
-      by: ['firstSeenAt'],
-      where: {
-        pageId: query.pageId && pageIds.includes(query.pageId) ? query.pageId : { in: pageIds },
-        firstSeenAt: { gte: start, lte: end },
-      },
-      _count: true,
-    });
+    const contactScope =
+      query.pageId && pageIds.includes(query.pageId) ? query.pageId : { in: pageIds };
+
+    const [activeContacts, blockedContacts, newContacts, contactGrowthRaw] = await Promise.all([
+      prisma.contact.count({ where: { pageId: contactScope, status: 'ACTIVE' } }),
+      prisma.contact.count({ where: { pageId: contactScope, status: 'BLOCKED' } }),
+      prisma.contact.count({
+        where: { pageId: contactScope, firstSeenAt: { gte: start, lte: end } },
+      }),
+      prisma.contact.findMany({
+        where: { pageId: contactScope, firstSeenAt: { gte: start, lte: end } },
+        select: { firstSeenAt: true },
+        orderBy: { firstSeenAt: 'asc' },
+        take: 5000,
+      }),
+    ]);
+
+    const growthByDay = new Map<string, number>();
+    for (const c of contactGrowthRaw) {
+      const key = c.firstSeenAt.toISOString().slice(0, 10);
+      growthByDay.set(key, (growthByDay.get(key) || 0) + 1);
+    }
 
     return {
       kpis: {
         totalBroadcasts,
         totalRecipients,
         messagesSent: sent,
-        deliveryRate: sent ? delivered / sent : 0,
-        failureRate: sent + failed ? failed / (sent + failed) : 0,
-        responseRate: delivered ? responses / delivered : 0,
+        deliveryRate: processed ? sent / processed : 0,
+        failureRate: processed ? failed / processed : 0,
+        skipRate: processed ? skipped / processed : 0,
+        responseRate: 0,
         averageResponseTime: null as number | null,
+        activeContacts,
+        blockedContacts,
+        newContacts,
       },
       series: {
-        broadcastVolume: broadcasts.map((b) => ({
-          date: b.createdAt,
-          name: b.name,
-          sent: b.sentCount,
-          delivered: b.deliveredCount,
-          failed: b.failedCount,
+        broadcastVolume: campaigns.map((c) => ({
+          date: c.createdAt,
+          name: c.message?.slice(0, 40) || c.id.slice(0, 8),
+          sent: c.sentCount,
+          delivered: c.sentCount,
+          failed: c.failedCount,
+          skipped: c.skippedCount,
         })),
-        contactGrowth: contactGrowth.map((c) => ({
-          date: c.firstSeenAt,
-          count: c._count,
+        contactGrowth: Array.from(growthByDay.entries()).map(([date, count]) => ({
+          date,
+          count,
         })),
       },
     };
@@ -81,16 +106,32 @@ export async function analyticsRoutes(app: FastifyInstance) {
     const user = await requireUser(request);
     const query = analyticsQuerySchema.parse(request.query);
     const { start, end } = rangeToDates(query.range, query.from, query.to);
-    const data = await prisma.broadcast.findMany({
+    const data = await prisma.broadcastCampaign.findMany({
       where: {
         userId: user.id,
-        ...(query.pageId ? { pageId: query.pageId } : {}),
+        dismissedAt: null,
         createdAt: { gte: start, lte: end },
+        ...(query.pageId ? { pages: { some: { pageId: query.pageId } } } : {}),
       },
-      include: { template: { select: { title: true } }, page: { select: { name: true } } },
+      include: {
+        pages: { select: { pageName: true, sentCount: true, failedCount: true } },
+      },
       orderBy: { createdAt: 'desc' },
+      take: 50,
     });
-    return { data };
+    return {
+      data: data.map((c) => ({
+        id: c.id,
+        phase: c.phase,
+        message: c.message,
+        estimatedRecipients: c.estimatedRecipients,
+        sentCount: c.sentCount,
+        failedCount: c.failedCount,
+        skippedCount: c.skippedCount,
+        createdAt: c.createdAt,
+        pages: c.pages,
+      })),
+    };
   });
 
   app.get('/api/analytics/contacts', async (request) => {
@@ -100,23 +141,18 @@ export async function analyticsRoutes(app: FastifyInstance) {
     const pageIds = (
       await prisma.pageConnection.findMany({ where: { userId: user.id }, select: { pageId: true } })
     ).map((p) => p.pageId);
-    const total = await prisma.contact.count({
-      where: {
-        pageId: query.pageId && pageIds.includes(query.pageId) ? query.pageId : { in: pageIds },
-      },
-    });
+    const scope =
+      query.pageId && pageIds.includes(query.pageId) ? query.pageId : { in: pageIds };
+    const total = await prisma.contact.count({ where: { pageId: scope } });
     const newContacts = await prisma.contact.count({
-      where: {
-        pageId: query.pageId && pageIds.includes(query.pageId) ? query.pageId : { in: pageIds },
-        firstSeenAt: { gte: start, lte: end },
-      },
+      where: { pageId: scope, firstSeenAt: { gte: start, lte: end } },
     });
     const active = await prisma.contact.count({
-      where: {
-        pageId: query.pageId && pageIds.includes(query.pageId) ? query.pageId : { in: pageIds },
-        status: 'ACTIVE',
-      },
+      where: { pageId: scope, status: 'ACTIVE' },
     });
-    return { total, newContacts, active };
+    const blocked = await prisma.contact.count({
+      where: { pageId: scope, status: 'BLOCKED' },
+    });
+    return { total, newContacts, active, blocked };
   });
 }

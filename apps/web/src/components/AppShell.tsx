@@ -30,7 +30,7 @@ type Me = {
 };
 
 const PAGE_KEY = 'pb_active_page';
-const ME_POLL_MS = 20_000;
+const ME_POLL_MS = 60_000;
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();

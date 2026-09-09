@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { LoadingState } from '@/components/EmptyState';
+import { LibraryModal } from './library-modal';
 import {
   CUSTOM_STARTER,
   SPEED_PRESETS,
@@ -25,7 +26,6 @@ type PageRow = {
 };
 
 type SpeedId = (typeof SPEED_PRESETS)[number]['id'];
-type AudienceMode = 'all' | 'label' | 'pick';
 
 function defaultSlots(tpl: StarterTemplate): string[] {
   return tpl.labels.map((label, i) => {
@@ -70,233 +70,6 @@ function MessengerPreview({
   );
 }
 
-function LibraryModal({
-  open,
-  items,
-  editing,
-  slots,
-  busy,
-  approveWait,
-  libraryApproved,
-  approvedPageCount,
-  selectedCount,
-  focusedSlot,
-  error,
-  onClose,
-  onSelect,
-  onSlotChange,
-  onFocusSlot,
-  onChip,
-  onUseTemplate,
-}: {
-  open: boolean;
-  items: StarterTemplate[];
-  editing: StarterTemplate | null;
-  slots: string[];
-  busy: boolean;
-  approveWait: string | null;
-  libraryApproved: boolean;
-  approvedPageCount: number;
-  selectedCount: number;
-  focusedSlot: number;
-  error: string;
-  onClose: () => void;
-  onSelect: (tpl: StarterTemplate) => void;
-  onSlotChange: (index: number, value: string) => void;
-  onFocusSlot: (index: number) => void;
-  onChip: (value: string) => void;
-  onUseTemplate: () => void;
-}) {
-  if (!open) return null;
-
-  const numbered = items.filter((t) => !t.instant && t.id !== 'custom');
-  const instant = items.filter((t) => t.instant || t.id === 'custom');
-
-  return (
-    <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-slate-900/50 p-3 pt-8 sm:p-4 sm:pt-12">
-      <div className="relative mb-8 w-full max-w-4xl rounded-2xl bg-white shadow-2xl">
-        <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-4 py-4 sm:px-5">
-          <div className="min-w-0">
-            <h2 className="text-lg font-semibold text-slate-900">Choose from Library</h2>
-            <p className="mt-1 text-sm text-amber-700">
-              If this template has never been used on your page, approval usually takes{' '}
-              <span className="font-semibold">30–60 seconds</span>. Please keep this window open.
-            </p>
-          </div>
-          <button
-            type="button"
-            className="shrink-0 rounded-lg px-2.5 py-1.5 text-sm text-slate-500 hover:bg-slate-100"
-            onClick={onClose}
-            disabled={busy}
-            aria-label="Close"
-          >
-            Close
-          </button>
-        </div>
-
-        <div className="grid max-h-[min(78vh,820px)] gap-0 lg:grid-cols-[1.15fr_0.85fr]">
-          <div className="overflow-y-auto border-b border-slate-100 p-4 lg:border-b-0 lg:border-r">
-            <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Templates
-            </p>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              {numbered.map((tpl) => {
-                const active = editing?.id === tpl.id;
-                return (
-                  <button
-                    key={tpl.id}
-                    type="button"
-                    disabled={busy}
-                    onClick={() => onSelect(tpl)}
-                    className={`rounded-xl border p-3 text-left transition ${
-                      active
-                        ? 'border-primary bg-blue-50/70 ring-1 ring-primary/30'
-                        : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
-                    }`}
-                  >
-                    <div className="mb-2 flex items-center justify-between gap-2">
-                      <span className="font-semibold text-slate-900">{tpl.title}</span>
-                      <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-600">
-                        {tpl.badge || 'EN'}
-                      </span>
-                    </div>
-                    <p className="line-clamp-4 whitespace-pre-wrap text-xs leading-relaxed text-slate-600">
-                      {tpl.body}
-                    </p>
-                  </button>
-                );
-              })}
-            </div>
-
-            {instant.length ? (
-              <>
-                <p className="mb-3 mt-6 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Instant (shared plain UTILITY)
-                </p>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  {instant.map((tpl) => {
-                    const active = editing?.id === tpl.id;
-                    return (
-                      <button
-                        key={tpl.id}
-                        type="button"
-                        disabled={busy}
-                        onClick={() => onSelect(tpl)}
-                        className={`rounded-xl border p-3 text-left transition ${
-                          active
-                            ? 'border-emerald-500 bg-emerald-50/60 ring-1 ring-emerald-400/40'
-                            : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
-                        }`}
-                      >
-                        <div className="mb-2 flex items-center justify-between gap-2">
-                          <span className="font-semibold text-slate-900">{tpl.title}</span>
-                          <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-700">
-                            Instant
-                          </span>
-                        </div>
-                        <p className="line-clamp-3 whitespace-pre-wrap text-xs leading-relaxed text-slate-600">
-                          {tpl.body}
-                        </p>
-                      </button>
-                    );
-                  })}
-                </div>
-              </>
-            ) : null}
-          </div>
-
-          <div className="relative overflow-y-auto p-4">
-            {approveWait ? (
-              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-white/90 px-6 text-center backdrop-blur-[1px]">
-                <div className="h-10 w-10 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-                <p className="text-sm font-semibold text-slate-800">Checking template approval…</p>
-                <p className="text-sm text-slate-600">{approveWait}</p>
-                <p className="text-xs text-amber-700">Working on this one… please wait.</p>
-              </div>
-            ) : null}
-
-            {editing ? (
-              <div className="space-y-4">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Selected
-                  </p>
-                  <h3 className="text-base font-semibold text-slate-900">{editing.title}</h3>
-                  {libraryApproved ? (
-                    <p className="mt-1 text-sm text-emerald-700">
-                      Approved on {approvedPageCount || selectedCount} of {selectedCount} page
-                      {selectedCount === 1 ? '' : 's'}
-                    </p>
-                  ) : (
-                    <p className="mt-1 text-sm text-slate-500">
-                      Click a card to sync &amp; approve on Meta.
-                    </p>
-                  )}
-                </div>
-
-                {libraryApproved ? (
-                  <div className="space-y-3">
-                    <p className="text-sm font-semibold text-slate-800">Fill the variables</p>
-                    {editing.labels.map((label, i) => (
-                      <label key={`${editing.id}-${i}`} className="block space-y-1">
-                        <span className="text-xs font-medium text-slate-600">
-                          BODY {`{{${i + 1}}}`} · {label}
-                        </span>
-                        <input
-                          className="input w-full"
-                          value={slots[i] || ''}
-                          onFocus={() => onFocusSlot(i)}
-                          onChange={(e) => onSlotChange(i, e.target.value)}
-                          placeholder={editing.examples[i] || `Value for {{${i + 1}}}`}
-                        />
-                      </label>
-                    ))}
-                    <div>
-                      <p className="mb-2 text-xs font-medium text-slate-500">Quick fill</p>
-                      <div className="flex flex-wrap gap-1.5">
-                        {TEMPLATE_QUICK_CHIPS.map((chip) => (
-                          <button
-                            key={chip.label}
-                            type="button"
-                            className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-700 hover:border-primary hover:bg-blue-50 hover:text-primary"
-                            onClick={() => onChip(chip.value)}
-                          >
-                            {chip.label}
-                          </button>
-                        ))}
-                      </div>
-                      <p className="mt-1 text-[10px] text-slate-400">
-                        Inserts into BODY {`{{${focusedSlot + 1}}}`}
-                      </p>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-                    Variable fields unlock after Meta approval.
-                  </div>
-                )}
-
-                {error ? <p className="text-sm text-red-600">{error}</p> : null}
-
-                <button
-                  type="button"
-                  className="btn-primary w-full"
-                  disabled={busy || !libraryApproved}
-                  onClick={onUseTemplate}
-                >
-                  Use this template
-                </button>
-              </div>
-            ) : (
-              <p className="text-sm text-slate-500">Select a template card to begin.</p>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default function NewCampaignPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
@@ -315,7 +88,6 @@ export default function NewCampaignPage() {
   const [message, setMessage] = useState('');
   const [imageUrl, setImageUrl] = useState('');
   const [speed, setSpeed] = useState<SpeedId>('balanced');
-  const [audience, setAudience] = useState<AudienceMode>('all');
   const [compliance, setCompliance] = useState(false);
   const [busy, setBusy] = useState(false);
   const [approveWait, setApproveWait] = useState<string | null>(null);
@@ -400,7 +172,6 @@ export default function NewCampaignPage() {
     selected.length > 0 &&
     hasLiveToken &&
     compliance &&
-    audience === 'all' &&
     (mode === 'custom'
       ? Boolean(message.trim() || imageUrl.trim())
       : Boolean(applied && previewText.trim()));
@@ -785,7 +556,8 @@ export default function NewCampaignPage() {
               <div>
                 <h2 className="text-lg font-semibold text-slate-900">1. Pages</h2>
                 <p className="text-sm text-slate-500">
-                  {selected.length} of {pages.length} selected · ~{estimated.toLocaleString()} people
+                  {selected.length} of {pages.length} selected · ~{estimated.toLocaleString()}{' '}
+                  reachable
                   {quota != null ? ` · ${quota.toLocaleString()} credits` : ''}
                 </p>
               </div>
@@ -852,7 +624,7 @@ export default function NewCampaignPage() {
                     <span className="min-w-0">
                       <span className="block truncate font-medium">{p.name}</span>
                       <span className="mt-0.5 block text-xs text-slate-500">
-                        {(p.contactCount || 0).toLocaleString()} contacts ·{' '}
+                        {(p.contactCount || 0).toLocaleString()} reachable ·{' '}
                         {p.hasPageToken === false ? 'no token' : 'token ok'}
                         {p.utilityReady ? ' · Instant ready' : ''}
                       </span>
@@ -866,49 +638,12 @@ export default function NewCampaignPage() {
           {/* 2. Audience */}
           <section className="space-y-3">
             <h2 className="text-lg font-semibold text-slate-900">2. Audience</h2>
-            <div className="grid gap-3 sm:grid-cols-3">
-              {(
-                [
-                  {
-                    id: 'all' as const,
-                    title: 'All leads',
-                    hint: 'Everyone with a conversation on selected pages',
-                    enabled: true,
-                  },
-                  {
-                    id: 'label' as const,
-                    title: 'By label',
-                    hint: 'Coming soon',
-                    enabled: false,
-                  },
-                  {
-                    id: 'pick' as const,
-                    title: 'Pick leads',
-                    hint: 'Coming soon',
-                    enabled: false,
-                  },
-                ] as const
-              ).map((opt) => {
-                const active = audience === opt.id;
-                return (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    disabled={!opt.enabled}
-                    onClick={() => setAudience(opt.id)}
-                    className={`rounded-xl border p-4 text-left transition ${
-                      active
-                        ? 'border-primary bg-blue-50/70'
-                        : opt.enabled
-                          ? 'border-slate-200 hover:border-slate-300'
-                          : 'cursor-not-allowed border-slate-100 bg-slate-50 opacity-60'
-                    }`}
-                  >
-                    <p className="font-semibold text-slate-900">{opt.title}</p>
-                    <p className="mt-1 text-xs text-slate-500">{opt.hint}</p>
-                  </button>
-                );
-              })}
+            <div className="rounded-2xl border border-primary/20 bg-primary/5 p-4">
+              <p className="font-semibold text-slate-900">Reachable Messenger leads</p>
+              <p className="mt-1 text-sm text-slate-600">
+                Sends only to people who can still receive messages. Blocked and inactive contacts
+                are excluded automatically (~{estimated.toLocaleString()} on selected pages).
+              </p>
             </div>
           </section>
 

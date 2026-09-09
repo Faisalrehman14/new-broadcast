@@ -16,34 +16,42 @@ export async function dashboardRoutes(app: FastifyInstance) {
     });
     const pageIds = connections.map((c) => c.pageId);
 
-    const [totalContacts, activeContacts, broadcasts] = await Promise.all([
+    const [totalContacts, activeContacts, blockedContacts, campaigns] = await Promise.all([
       prisma.contact.count({ where: { pageId: { in: pageIds } } }),
       prisma.contact.count({ where: { pageId: { in: pageIds }, status: 'ACTIVE' } }),
-      prisma.broadcast.findMany({ where: { userId: user.id } }),
+      prisma.contact.count({ where: { pageId: { in: pageIds }, status: 'BLOCKED' } }),
+      prisma.broadcastCampaign.findMany({
+        where: { userId: user.id, dismissedAt: null },
+        orderBy: { createdAt: 'desc' },
+        take: 40,
+        include: { pages: { select: { pageName: true } } },
+      }),
     ]);
 
-    const broadcastsSent = broadcasts.filter((b) =>
-      ['COMPLETED', 'PARTIALLY_COMPLETED', 'RUNNING', 'QUEUED'].includes(b.status)
+    const broadcastsSent = campaigns.filter((b) =>
+      ['completed', 'sending', 'queued', 'syncing_leads', 'setting_up_templates'].includes(b.phase)
     ).length;
-    const delivered = broadcasts.reduce((s, b) => s + b.deliveredCount, 0);
-    const failed = broadcasts.reduce((s, b) => s + b.failedCount, 0);
-    const sent = broadcasts.reduce((s, b) => s + b.sentCount, 0);
-    const responses = broadcasts.reduce((s, b) => s + b.responseCount, 0);
+    const delivered = campaigns.reduce((s, b) => s + b.sentCount, 0);
+    const failed = campaigns.reduce((s, b) => s + b.failedCount, 0);
+    const sent = delivered;
+    const responses = 0;
 
     const lastSyncedAt = connections
       .map((c) => c.lastSyncedAt)
       .filter(Boolean)
-      .sort((a, b) => (b!.getTime() - a!.getTime()))[0] ?? null;
+      .sort((a, b) => b!.getTime() - a!.getTime())[0] ?? null;
 
-    const recentBroadcasts = await prisma.broadcast.findMany({
-      where: { userId: user.id },
-      include: {
-        template: { select: { title: true } },
-        page: { select: { name: true } },
-      },
-      orderBy: { createdAt: 'desc' },
-      take: 8,
-    });
+    const recentBroadcasts = campaigns.slice(0, 8).map((c) => ({
+      id: c.id,
+      name: c.message?.slice(0, 48) || `Campaign ${c.id.slice(0, 8)}`,
+      status: c.phase.toUpperCase(),
+      totalRecipients: c.estimatedRecipients,
+      deliveredCount: c.sentCount,
+      failedCount: c.failedCount,
+      createdAt: c.createdAt,
+      template: { title: c.deliveryMode === 'freeform_plain' ? 'Instant' : 'Named template' },
+      page: { name: c.pages.map((p) => p.pageName).join(', ') || '—' },
+    }));
 
     const activity = await prisma.auditLog.findMany({
       where: { actorId: user.id },
@@ -51,10 +59,21 @@ export async function dashboardRoutes(app: FastifyInstance) {
       take: 15,
     });
 
+    // Keep denormalized page contactCount aligned to ACTIVE for UI chips.
+    const activeByPage = pageIds.length
+      ? await prisma.contact.groupBy({
+          by: ['pageId'],
+          where: { pageId: { in: pageIds }, status: 'ACTIVE' },
+          _count: { _all: true },
+        })
+      : [];
+    const activeMap = new Map(activeByPage.map((r) => [r.pageId, r._count._all]));
+
     return {
       kpis: {
         totalContacts,
         activeContacts,
+        blockedContacts,
         broadcastsSent,
         delivered,
         failed,
@@ -67,7 +86,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
         name: c.page.name,
         profileImage: c.page.profileImage,
         status: c.status,
-        contactCount: c.contactCount,
+        contactCount: activeMap.get(c.pageId) ?? 0,
       })),
       recentBroadcasts,
       activity,

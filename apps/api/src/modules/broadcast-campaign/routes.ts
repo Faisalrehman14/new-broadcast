@@ -1231,11 +1231,22 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
       where: { userId: user.id, status: { not: 'DISCONNECTED' } },
       include: { page: true },
     });
+    const pageIds = connections.map((c) => c.pageId);
+    const activeCounts = pageIds.length
+      ? await prisma.contact.groupBy({
+          by: ['pageId'],
+          where: { pageId: { in: pageIds }, status: 'ACTIVE' },
+          _count: { _all: true },
+        })
+      : [];
+    const byPage = new Map(activeCounts.map((r) => [r.pageId, r._count._all]));
     return {
       pages: connections.map((c) => ({
         page_id: c.pageId,
         name: c.page.name,
-        contact_count: c.contactCount,
+        // Reachable Messenger leads only — never include BLOCKED / INACTIVE.
+        contact_count: byPage.get(c.pageId) ?? 0,
+        contact_count_all: c.contactCount,
         last_synced_at: c.lastSyncedAt,
         status: c.status,
       })),

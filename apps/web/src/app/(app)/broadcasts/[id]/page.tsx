@@ -156,7 +156,13 @@ export default function CampaignDetailPage() {
         }`}
       >
         {campaign.phaseMessage || campaign.phase}
-        {campaign.active ? ' — Still working, not stuck.' : ''}
+        {campaign.active
+          ? campaign.phase === 'setting_up_templates'
+            ? ' · Preparing templates…'
+            : campaign.phase === 'syncing_leads'
+              ? ' · Syncing audience…'
+              : ' · Delivering…'
+          : ''}
       </div>
       {error ? <p className="text-sm text-danger">{error}</p> : null}
 
