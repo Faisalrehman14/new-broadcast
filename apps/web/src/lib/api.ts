@@ -98,11 +98,19 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
 
   if (!res.ok) {
     const err = data as { error?: { message?: string; code?: string } } | null;
-    throw new ApiClientError(
-      err?.error?.message || 'Something went wrong. Please try again.',
-      err?.error?.code,
-      res.status
-    );
+    const plain =
+      typeof data === 'string'
+        ? data.trim()
+        : typeof (data as { message?: string } | null)?.message === 'string'
+          ? (data as { message: string }).message
+          : '';
+    const fallback =
+      res.status === 502 || res.status === 504
+        ? 'The server took too long (proxy timeout). Keep this window open and try again — Meta approval often continues in the background.'
+        : res.status === 500 && /internal server error/i.test(plain)
+          ? 'Server error while talking to Meta. Wait a moment and open the template again.'
+          : 'Something went wrong. Please try again.';
+    throw new ApiClientError(err?.error?.message || (plain && plain.length < 200 ? plain : fallback), err?.error?.code, res.status);
   }
 
   return data as T;

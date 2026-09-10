@@ -25,6 +25,10 @@ import { assertUserOwnsPage } from '../../lib/ownership.js';
 import { logger } from '../../lib/logger.js';
 import { enqueueUtilityEnsure, enqueueUtilityEnsureForUser } from '../../lib/utility-auto.js';
 
+/** HTTP handlers must stay under Railway/proxy timeouts (~30–60s). Worker can poll longer. */
+const HTTP_TEMPLATE_WAIT = { waitRetries: 8, waitIntervalMs: 2500 } as const; // ~20s
+const WORKER_TEMPLATE_WAIT = { waitRetries: 40, waitIntervalMs: 3000 } as const; // ~2min
+
 async function remintPageAccessToken(page: {
   id: string;
   platformPageId: string;
@@ -58,7 +62,7 @@ async function remintPageAccessToken(page: {
 /** Ensure Instant plain UTILITY exists on a Page — list first, create only if missing. */
 async function ensurePlainUtilityOnPage(
   pageId: string,
-  opts?: { waitForApproved?: boolean }
+  opts?: { waitForApproved?: boolean; waitRetries?: number; waitIntervalMs?: number }
 ): Promise<{
   pageId: string;
   status: string;
@@ -67,6 +71,8 @@ async function ensurePlainUtilityOnPage(
   error?: string;
 }> {
   const waitForApproved = opts?.waitForApproved ?? false;
+  const waitRetries = opts?.waitRetries ?? HTTP_TEMPLATE_WAIT.waitRetries;
+  const waitIntervalMs = opts?.waitIntervalMs ?? HTTP_TEMPLATE_WAIT.waitIntervalMs;
   const page = await prisma.facebookPage.findUniqueOrThrow({ where: { id: pageId } });
   const name = PLAIN_UTILITY_TEMPLATE_NAME;
   const tplBody = PLAIN_UTILITY_BODY;
@@ -120,8 +126,8 @@ async function ensurePlainUtilityOnPage(
       pageId: page.platformPageId,
       pageAccessToken: token,
       templateName: name,
-      retries: 40,
-      intervalMs: 3000,
+      retries: waitRetries,
+      intervalMs: waitIntervalMs,
     });
     const next: 'APPROVED' | 'PENDING' | 'REJECTED' =
       waited.status === 'APPROVED'
@@ -139,21 +145,25 @@ async function ensurePlainUtilityOnPage(
   };
 
   const langs = ['en', 'en_US'] as const;
-  for (const language of langs) {
-    const listed = await metaProvider.listMessageTemplates({
-      pageId: page.platformPageId,
-      pageAccessToken: token,
-      name,
-    });
-    const hit =
-      listed.find((t) => t.name === name && t.status === 'APPROVED') ||
-      listed.find((t) => t.name === name) ||
-      listed.find((t) => t.name.toLowerCase() === name.toLowerCase());
-    if (hit) {
-      const status: 'APPROVED' | 'PENDING' | 'REJECTED' =
-        hit.status === 'APPROVED' ? 'APPROVED' : hit.status === 'REJECTED' ? 'REJECTED' : 'PENDING';
-      return waitIfNeeded(status, hit.language || language, hit.id || `utility_${name}`);
+  try {
+    for (const language of langs) {
+      const listed = await metaProvider.listMessageTemplates({
+        pageId: page.platformPageId,
+        pageAccessToken: token,
+        name,
+      });
+      const hit =
+        listed.find((t) => t.name === name && t.status === 'APPROVED') ||
+        listed.find((t) => t.name === name) ||
+        listed.find((t) => t.name.toLowerCase() === name.toLowerCase());
+      if (hit) {
+        const status: 'APPROVED' | 'PENDING' | 'REJECTED' =
+          hit.status === 'APPROVED' ? 'APPROVED' : hit.status === 'REJECTED' ? 'REJECTED' : 'PENDING';
+        return waitIfNeeded(status, hit.language || language, hit.id || `utility_${name}`);
+      }
     }
+  } catch (err) {
+    logger.warn({ err, pageId }, 'plain UTILITY list failed — trying create');
   }
 
   let lastErr = 'create failed';
@@ -242,6 +252,8 @@ async function ensureNamedUtilityOnPage(params: {
   language?: string;
   exampleValues?: string[];
   waitForApproved?: boolean;
+  waitRetries?: number;
+  waitIntervalMs?: number;
 }): Promise<{
   pageId: string;
   status: string;
@@ -252,6 +264,8 @@ async function ensureNamedUtilityOnPage(params: {
   error?: string;
 }> {
   const waitForApproved = params.waitForApproved ?? true;
+  const waitRetries = params.waitRetries ?? HTTP_TEMPLATE_WAIT.waitRetries;
+  const waitIntervalMs = params.waitIntervalMs ?? HTTP_TEMPLATE_WAIT.waitIntervalMs;
   const name = params.templateName;
   const tplBody = params.body;
   const preferred = (params.language || 'en').trim() || 'en';
@@ -266,15 +280,27 @@ async function ensureNamedUtilityOnPage(params: {
   const page = await prisma.facebookPage.findUniqueOrThrow({ where: { id: params.pageId } });
   const token = await remintPageAccessToken(page);
 
-  const listed = await metaProvider.listMessageTemplates({
-    pageId: page.platformPageId,
-    pageAccessToken: token,
-    name,
-  });
-  const existing =
-    listed.find((t) => t.name === name && t.status === 'APPROVED') ||
-    listed.find((t) => t.name === name) ||
-    listed.find((t) => t.name.toLowerCase() === name.toLowerCase());
+  let existing:
+    | {
+        id?: string;
+        name: string;
+        status: string;
+        language?: string;
+      }
+    | undefined;
+  try {
+    const listed = await metaProvider.listMessageTemplates({
+      pageId: page.platformPageId,
+      pageAccessToken: token,
+      name,
+    });
+    existing =
+      listed.find((t) => t.name === name && t.status === 'APPROVED') ||
+      listed.find((t) => t.name === name) ||
+      listed.find((t) => t.name.toLowerCase() === name.toLowerCase());
+  } catch (err) {
+    logger.warn({ err, pageId: params.pageId, name }, 'named UTILITY list failed — trying create');
+  }
 
   const persist = async (
     status: 'APPROVED' | 'PENDING' | 'REJECTED',
@@ -321,8 +347,8 @@ async function ensureNamedUtilityOnPage(params: {
         pageId: page.platformPageId,
         pageAccessToken: token,
         templateName: name,
-        retries: 40,
-        intervalMs: 3000,
+        retries: waitRetries,
+        intervalMs: waitIntervalMs,
       });
       status =
         waited.status === 'APPROVED'
@@ -371,8 +397,8 @@ async function ensureNamedUtilityOnPage(params: {
           pageId: page.platformPageId,
           pageAccessToken: token,
           templateName: name,
-          retries: 40,
-          intervalMs: 3000,
+          retries: waitRetries,
+          intervalMs: waitIntervalMs,
         });
         status =
           waited.status === 'APPROVED'
@@ -794,7 +820,21 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
       body.body === '{{1}}';
 
     if (wantsPlain) {
-      const result = await ensurePlainUtilityOnPage(body.page_id, { waitForApproved: true });
+      const result = await ensurePlainUtilityOnPage(body.page_id, {
+        waitForApproved: true,
+        ...HTTP_TEMPLATE_WAIT,
+      });
+      if (result.status === 'PENDING') {
+        void ensurePlainUtilityOnPage(body.page_id, {
+          waitForApproved: true,
+          ...WORKER_TEMPLATE_WAIT,
+        }).catch((err) => logger.warn({ err, pageId: body.page_id }, 'bg plain utility wait failed'));
+        void enqueueUtilityEnsure(body.page_id, {
+          waitForApproved: true,
+          userId: user.id,
+          delayMs: 500,
+        }).catch(() => undefined);
+      }
       if (result.status === 'error') {
         throw new AppError(
           'FACEBOOK_ERROR',
@@ -848,8 +888,8 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
           pageId: page.platformPageId,
           pageAccessToken: token,
           templateName: name,
-          retries: 40,
-          intervalMs: 3000,
+          retries: HTTP_TEMPLATE_WAIT.waitRetries,
+          intervalMs: HTTP_TEMPLATE_WAIT.waitIntervalMs,
         });
         created = {
           externalTemplateId: waited.externalTemplateId || created.externalTemplateId,
@@ -918,8 +958,15 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
         } catch (err) {
           logger.warn({ err, pageId }, 'prepare-instant sync skipped');
         }
-        const result = await ensurePlainUtilityOnPage(pageId, { waitForApproved: true });
+        const result = await ensurePlainUtilityOnPage(pageId, {
+          waitForApproved: true,
+          ...HTTP_TEMPLATE_WAIT,
+        });
         if (result.status === 'PENDING') {
+          void ensurePlainUtilityOnPage(pageId, {
+            waitForApproved: true,
+            ...WORKER_TEMPLATE_WAIT,
+          }).catch((err) => logger.warn({ err, pageId }, 'bg prepare-instant wait failed'));
           void enqueueUtilityEnsure(pageId, {
             waitForApproved: true,
             userId: user.id,
@@ -986,39 +1033,41 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
       body.body === PLAIN_UTILITY_BODY ||
       body.body === '{{1}}';
 
-    const results: Array<{
-      page_id: string;
-      page_name?: string;
-      status: string;
-      name: string;
-      path?: string;
-      error?: string;
-      upserted?: number;
-    }> = [];
+    const results = await Promise.all(
+      body.page_ids.map(async (pageId) => {
+        try {
+          await assertUserOwnsPage(user.id, pageId);
+          const page = await prisma.facebookPage.findUnique({ where: { id: pageId } });
 
-    for (const pageId of body.page_ids) {
-      try {
-        await assertUserOwnsPage(user.id, pageId);
-        const page = await prisma.facebookPage.findUnique({ where: { id: pageId } });
-
-        if (usePlain) {
-          let upserted = 0;
-          try {
-            upserted = (await syncPageUtilityTemplates(pageId)).upserted;
-          } catch (err) {
-            logger.warn({ err, pageId }, 'ensure-library plain sync failed');
+          if (usePlain) {
+            let upserted = 0;
+            try {
+              upserted = (await syncPageUtilityTemplates(pageId)).upserted;
+            } catch (err) {
+              logger.warn({ err, pageId }, 'ensure-library plain sync failed');
+            }
+            const result = await ensurePlainUtilityOnPage(pageId, {
+              waitForApproved: true,
+              ...HTTP_TEMPLATE_WAIT,
+            });
+            if (result.status === 'PENDING') {
+              void ensurePlainUtilityOnPage(pageId, {
+                waitForApproved: true,
+                ...WORKER_TEMPLATE_WAIT,
+              }).catch((err) => logger.warn({ err, pageId }, 'bg ensure-library plain wait failed'));
+            }
+            return {
+              page_id: pageId,
+              page_name: page?.name,
+              status: result.status,
+              name: PLAIN_UTILITY_TEMPLATE_NAME,
+              path:
+                result.status === 'APPROVED' ? 'warm' : result.status === 'error' ? 'error' : 'cold',
+              error: result.error,
+              upserted,
+            };
           }
-          const result = await ensurePlainUtilityOnPage(pageId, { waitForApproved: true });
-          results.push({
-            page_id: pageId,
-            page_name: page?.name,
-            status: result.status,
-            name: PLAIN_UTILITY_TEMPLATE_NAME,
-            path: result.status === 'APPROVED' ? 'warm' : result.status === 'error' ? 'error' : 'cold',
-            error: result.error,
-            upserted,
-          });
-        } else {
+
           const result = await ensureNamedUtilityOnPage({
             pageId,
             templateName: body.template_name,
@@ -1026,26 +1075,43 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
             language: body.language || 'en',
             exampleValues: body.example_values,
             waitForApproved: true,
+            ...HTTP_TEMPLATE_WAIT,
           });
-          results.push({
+          if (result.status === 'PENDING') {
+            void ensureNamedUtilityOnPage({
+              pageId,
+              templateName: body.template_name,
+              body: body.body,
+              language: body.language || 'en',
+              exampleValues: body.example_values,
+              waitForApproved: true,
+              ...WORKER_TEMPLATE_WAIT,
+            }).catch((err) =>
+              logger.warn(
+                { err, pageId, name: body.template_name },
+                'bg ensure-library named wait failed'
+              )
+            );
+          }
+          return {
             page_id: pageId,
             page_name: page?.name,
             status: result.status,
             name: result.name,
             path: result.path,
             error: result.error,
-          });
+          };
+        } catch (err) {
+          return {
+            page_id: pageId,
+            status: 'error',
+            name: body.template_name,
+            path: 'error',
+            error: err instanceof Error ? err.message : String(err),
+          };
         }
-      } catch (err) {
-        results.push({
-          page_id: pageId,
-          status: 'error',
-          name: body.template_name,
-          path: 'error',
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
+      })
+    );
 
     const approved = results.filter((r) => r.status === 'APPROVED').length;
     const pending = results.filter((r) => r.status === 'PENDING').length;
@@ -1098,7 +1164,7 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
 
   app.get('/api/broadcast/utility-status', async (request) => {
     const user = await requireUser(request);
-    const q = request.query as { template_name?: string };
+    const q = request.query as { template_name?: string; refresh?: string };
     const templateName = (q.template_name || PLAIN_UTILITY_TEMPLATE_NAME).trim() || PLAIN_UTILITY_TEMPLATE_NAME;
     const connections = await prisma.pageConnection.findMany({
       where: { userId: user.id, status: { not: 'DISCONNECTED' } },
@@ -1114,6 +1180,50 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
         },
       },
     });
+
+    // During library poll, refresh Meta status so PENDING → APPROVED without another long ensure call.
+    if (q.refresh === '1' || q.refresh === 'true') {
+      await Promise.all(
+        connections.slice(0, 20).map(async (c) => {
+          const approved = c.page.utilityTemplates.some((t) => t.status === 'APPROVED');
+          if (approved) return;
+          try {
+            await syncPageUtilityTemplates(c.pageId);
+          } catch (err) {
+            logger.warn({ err, pageId: c.pageId }, 'utility-status refresh sync failed');
+          }
+        })
+      );
+      const refreshed = await prisma.pageConnection.findMany({
+        where: { userId: user.id, status: { not: 'DISCONNECTED' } },
+        include: {
+          page: {
+            include: {
+              utilityTemplates: {
+                where: { templateName },
+                orderBy: { updatedAt: 'desc' },
+                take: 3,
+              },
+            },
+          },
+        },
+      });
+      return {
+        template_name: templateName,
+        pages: refreshed.map((c) => {
+          const approvedRow = c.page.utilityTemplates.find((t) => t.status === 'APPROVED');
+          const latest = approvedRow || c.page.utilityTemplates[0];
+          return {
+            page_id: c.pageId,
+            name: c.page.name,
+            status: latest?.status || 'missing',
+            language: latest?.language || null,
+            ready: Boolean(approvedRow),
+          };
+        }),
+      };
+    }
+
     return {
       template_name: templateName,
       pages: connections.map((c) => {

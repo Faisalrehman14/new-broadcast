@@ -371,7 +371,7 @@ export default function NewCampaignPage() {
       return { ready, pending: 0, message: prep.message, path: cold ? 'cold' : 'warm' };
     }
 
-    const statusPath = `/api/broadcast/utility-status?template_name=${encodeURIComponent(metaName)}`;
+    const statusPath = `/api/broadcast/utility-status?template_name=${encodeURIComponent(metaName)}&refresh=1`;
     // Poll longer — Meta review often exceeds 60s; old UI stopped early and blamed reconnect.
     const deadline = Date.now() + 90_000;
     let pending = Math.max(0, selected.length - ready);
