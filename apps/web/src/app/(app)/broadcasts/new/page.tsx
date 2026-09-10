@@ -319,8 +319,8 @@ export default function NewCampaignPage() {
 
     setApproveWait(
       usePlain
-        ? 'Preparing Instant send… usually under a minute.'
-        : 'Approving with Meta… usually 30–60 seconds. Keep this open.'
+        ? 'Preparing Instant send… Meta review can take 1–2 minutes.'
+        : 'Approving with Meta… usually 1–2 minutes. Keep this open.'
     );
 
     const prep = await api<{
@@ -332,13 +332,15 @@ export default function NewCampaignPage() {
         name?: string;
       }>;
       message?: string;
+      pending?: number;
+      approved?: number;
     }>('/api/broadcast/ensure-library', {
       method: 'POST',
       body: JSON.stringify({
         page_ids: selected,
         template_name: metaName,
         body: metaBody,
-        language: 'en',
+        language: 'en_US',
         example_values: tpl.examples.length ? tpl.examples : tpl.parameters,
         instant: usePlain,
       }),
@@ -346,8 +348,9 @@ export default function NewCampaignPage() {
 
     let ready = prep.results.filter((r) => r.status === 'APPROVED').length;
     const errHit = prep.results.find((r) => r.status === 'error' || r.status === 'REJECTED');
+    const pendingHits = prep.results.filter((r) => r.status === 'PENDING');
     const cold = prep.results.some((r) => r.path === 'cold');
-    if (cold && ready < selected.length) {
+    if ((cold || pendingHits.length) && ready < selected.length) {
       setApproveWait('Waiting for Meta approval…');
     }
 
@@ -369,7 +372,8 @@ export default function NewCampaignPage() {
     }
 
     const statusPath = `/api/broadcast/utility-status?template_name=${encodeURIComponent(metaName)}`;
-    const deadline = Date.now() + 30_000;
+    // Poll longer — Meta review often exceeds 60s; old UI stopped early and blamed reconnect.
+    const deadline = Date.now() + 90_000;
     let pending = Math.max(0, selected.length - ready);
     while (Date.now() < deadline && ready < selected.length) {
       const status = await api<{
@@ -378,7 +382,7 @@ export default function NewCampaignPage() {
       if (status) {
         const hits = status.pages.filter((x) => selected.includes(x.page_id));
         ready = hits.filter(
-          (x) => x.ready || x.status === 'APPROVED' || x.status === 'approved'
+          (x) => x.ready || /^approved$/i.test(x.status)
         ).length;
         pending = Math.max(0, selected.length - ready);
         setPages((prev) =>
@@ -390,13 +394,29 @@ export default function NewCampaignPage() {
         setApprovedPageCount(ready);
         if (ready >= selected.length) break;
       }
-      await new Promise((r) => setTimeout(r, 2500));
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+
+    const metaError = errHit?.error;
+    const stillPending = pending > 0 || pendingHits.length > 0;
+    let error: string | undefined;
+    if (ready === 0) {
+      if (metaError) {
+        error = metaError;
+      } else if (stillPending) {
+        error =
+          'Meta is still reviewing this template (Pending). Reconnect will not speed that up — wait a minute and tap the template again, or try Instant / Custom message.';
+      } else {
+        error =
+          prep.message ||
+          'Could not approve this template on the selected pages. Open the template again to retry, or use Instant message.';
+      }
     }
 
     return {
       ready,
       pending,
-      error: errHit?.error,
+      error,
       message: prep.message,
       path: cold ? 'cold' : 'warm',
     };
@@ -427,10 +447,7 @@ export default function NewCampaignPage() {
         );
       } else {
         setLibraryApproved(false);
-        setError(
-          prepError ||
-            'Meta has not approved this template yet. Reconnect Facebook and grant Utility Messaging.'
-        );
+        setError(prepError || message || 'Template not ready on selected pages yet.');
       }
     } catch (err) {
       setLibraryApproved(false);

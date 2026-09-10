@@ -520,7 +520,7 @@ export class MetaGraphProvider implements MetaProvider {
 
   /**
    * Poll Page message_templates until APPROVED/REJECTED or retries exhausted.
-   * Ported from fb-page-manager waitForApproved.
+   * Defaults match worker (~2 min) — API used to stop at ~60s and the UI blamed reconnect.
    */
   async waitForUtilityTemplateApproved(params: {
     pageId: string;
@@ -529,8 +529,8 @@ export class MetaGraphProvider implements MetaProvider {
     retries?: number;
     intervalMs?: number;
   }): Promise<MetaTemplateStatus> {
-    const retries = params.retries ?? 15;
-    const intervalMs = params.intervalMs ?? 4000;
+    const retries = params.retries ?? 40;
+    const intervalMs = params.intervalMs ?? 3000;
     let last: MetaTemplateStatus = {
       externalTemplateId: `utility_${params.templateName}`,
       status: 'PENDING',
@@ -544,6 +544,7 @@ export class MetaGraphProvider implements MetaProvider {
         name: params.templateName,
       });
       const hit =
+        list.find((t) => t.name === params.templateName && t.status === 'APPROVED') ||
         list.find((t) => t.name === params.templateName) ||
         list.find((t) => t.name.toLowerCase() === params.templateName.toLowerCase());
       if (hit) {
@@ -630,42 +631,78 @@ export class MetaGraphProvider implements MetaProvider {
     pageAccessToken: string;
     name?: string;
   }): Promise<MetaUtilityTemplateSummary[]> {
+    const wanted = params.name?.trim();
     const out: MetaUtilityTemplateSummary[] = [];
-    let after: string | undefined;
-    // Name-filtered lookups are usually one page; full sync may need cursors.
-    for (let page = 0; page < 20; page++) {
-      const qs = new URLSearchParams({
-        access_token: params.pageAccessToken,
-        fields: 'name,status,language,category,id',
-        limit: params.name ? '25' : '100',
-      });
-      if (params.name) qs.set('name', params.name);
-      if (after) qs.set('after', after);
-      const res = await fetch(`${this.base()}/${params.pageId}/message_templates?${qs}`);
-      if (!res.ok) break;
-      const data = (await res.json()) as {
-        data?: Array<{
-          id?: string;
-          name: string;
-          status?: string;
-          language?: string;
-          category?: string;
-        }>;
-        paging?: { cursors?: { after?: string }; next?: string };
-      };
-      for (const t of data.data ?? []) {
-        out.push({
-          id: t.id,
-          name: t.name,
-          status: mapStatus((t.status ?? 'UNKNOWN').toUpperCase()),
-          language: t.language || 'en_US',
-          category: t.category,
+
+    const pull = async (opts: { name?: string; maxPages: number }) => {
+      let after: string | undefined;
+      const collected: MetaUtilityTemplateSummary[] = [];
+      for (let page = 0; page < opts.maxPages; page++) {
+        const qs = new URLSearchParams({
+          access_token: params.pageAccessToken,
+          fields: 'name,status,language,category,id',
+          limit: opts.name ? '25' : '100',
         });
+        if (opts.name) qs.set('name', opts.name);
+        if (after) qs.set('after', after);
+        const res = await fetch(`${this.base()}/${params.pageId}/message_templates?${qs}`);
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(`Meta listMessageTemplates failed: ${res.status} ${text.slice(0, 400)}`);
+        }
+        const data = (await res.json()) as {
+          data?: Array<{
+            id?: string;
+            name: string;
+            status?: string;
+            language?: string;
+            category?: string;
+          }>;
+          paging?: { cursors?: { after?: string }; next?: string };
+          error?: { message?: string; code?: number };
+        };
+        if (data.error?.message) {
+          throw new Error(
+            `Meta listMessageTemplates failed: ${data.error.code || ''} ${data.error.message}`.trim()
+          );
+        }
+        for (const t of data.data ?? []) {
+          collected.push({
+            id: t.id,
+            name: t.name,
+            status: mapStatus((t.status ?? 'UNKNOWN').toUpperCase()),
+            language: t.language || 'en_US',
+            category: t.category,
+          });
+        }
+        after = data.paging?.cursors?.after;
+        if (!after || !data.paging?.next) break;
+        // Name-filtered Graph responses are usually a single page; still follow cursors if present.
       }
-      after = data.paging?.cursors?.after;
-      if (!after || !data.paging?.next || params.name) break;
+      return collected;
+    };
+
+    if (wanted) {
+      try {
+        const filtered = await pull({ name: wanted, maxPages: 5 });
+        const matches = filtered.filter(
+          (t) => t.name === wanted || t.name.toLowerCase() === wanted.toLowerCase()
+        );
+        if (matches.length) return matches;
+      } catch (err) {
+        // Name filter often 400s / empties on Pages — fall back to full list below.
+        if (!/listMessageTemplates failed/i.test(err instanceof Error ? err.message : '')) {
+          throw err;
+        }
+      }
+      // Meta name= filter is unreliable — scan unfiltered and match client-side.
+      const all = await pull({ maxPages: 20 });
+      return all.filter(
+        (t) => t.name === wanted || t.name.toLowerCase() === wanted.toLowerCase()
+      );
     }
-    return out;
+
+    return pull({ maxPages: 20 });
   }
 
   async getTemplateStatus(params: {
@@ -861,12 +898,16 @@ function resolveMessagingPolicy(input: MetaSendTemplateInput): {
 }
 
 function mapStatus(raw: string): MetaTemplateStatus['status'] {
+  const key = raw.trim().toUpperCase().replace(/\s+/g, '_');
   const statusMap: Record<string, MetaTemplateStatus['status']> = {
     PENDING: 'PENDING',
+    IN_REVIEW: 'PENDING',
+    IN_APPEAL: 'PENDING',
     APPROVED: 'APPROVED',
+    ACTIVE: 'APPROVED',
     REJECTED: 'REJECTED',
     PAUSED: 'PAUSED',
     DISABLED: 'DISABLED',
   };
-  return statusMap[raw] ?? 'UNKNOWN';
+  return statusMap[key] ?? 'UNKNOWN';
 }

@@ -120,8 +120,8 @@ async function ensurePlainUtilityOnPage(
       pageId: page.platformPageId,
       pageAccessToken: token,
       templateName: name,
-      retries: 15,
-      intervalMs: 4000,
+      retries: 40,
+      intervalMs: 3000,
     });
     const next: 'APPROVED' | 'PENDING' | 'REJECTED' =
       waited.status === 'APPROVED'
@@ -233,6 +233,7 @@ async function syncPageUtilityTemplates(pageId: string): Promise<{ upserted: num
 /**
  * Warm: reuse APPROVED Meta template after sync.
  * Cold: create UTILITY + wait until APPROVED (Page Instant deploy path).
+ * Tries `en` then `en_US` — Meta stores locales distinctly; UI used to send only `en`.
  */
 async function ensureNamedUtilityOnPage(params: {
   pageId: string;
@@ -253,7 +254,8 @@ async function ensureNamedUtilityOnPage(params: {
   const waitForApproved = params.waitForApproved ?? true;
   const name = params.templateName;
   const tplBody = params.body;
-  const language = params.language || 'en';
+  const preferred = (params.language || 'en').trim() || 'en';
+  const langs = Array.from(new Set([preferred, 'en', 'en_US']));
 
   try {
     await syncPageUtilityTemplates(params.pageId);
@@ -312,15 +314,15 @@ async function ensureNamedUtilityOnPage(params: {
           ? 'REJECTED'
           : 'PENDING';
     let externalId = existing.id || `utility_${name}`;
-    const lang = existing.language || language;
+    const lang = existing.language || preferred;
 
     if (status === 'PENDING' && waitForApproved) {
       const waited = await metaProvider.waitForUtilityTemplateApproved({
         pageId: page.platformPageId,
         pageAccessToken: token,
         templateName: name,
-        retries: 15,
-        intervalMs: 4000,
+        retries: 40,
+        intervalMs: 3000,
       });
       status =
         waited.status === 'APPROVED'
@@ -342,71 +344,75 @@ async function ensureNamedUtilityOnPage(params: {
     };
   }
 
-  // Cold path — create then wait (like Page Instant deploy)
-  try {
-    const created = await metaProvider.createUtilityTemplate({
-      pageId: page.platformPageId,
-      pageAccessToken: token,
-      name,
-      category: 'UTILITY',
-      language,
-      body: tplBody,
-      exampleValues: params.exampleValues?.length
-        ? params.exampleValues
-        : ['Hello from CastMe Pro'],
-    });
-    let status: 'APPROVED' | 'PENDING' | 'REJECTED' =
-      created.status === 'APPROVED'
-        ? 'APPROVED'
-        : created.status === 'REJECTED'
-          ? 'REJECTED'
-          : 'PENDING';
-    let externalId = created.externalTemplateId;
-
-    if (status === 'PENDING' && waitForApproved) {
-      const waited = await metaProvider.waitForUtilityTemplateApproved({
+  let lastErr = 'create failed';
+  for (const language of langs) {
+    try {
+      const created = await metaProvider.createUtilityTemplate({
         pageId: page.platformPageId,
         pageAccessToken: token,
-        templateName: name,
-        retries: 15,
-        intervalMs: 4000,
+        name,
+        category: 'UTILITY',
+        language,
+        body: tplBody,
+        exampleValues: params.exampleValues?.length
+          ? params.exampleValues
+          : ['Hello from CastMe Pro'],
       });
-      status =
-        waited.status === 'APPROVED'
+      let status: 'APPROVED' | 'PENDING' | 'REJECTED' =
+        created.status === 'APPROVED'
           ? 'APPROVED'
-          : waited.status === 'REJECTED'
+          : created.status === 'REJECTED'
             ? 'REJECTED'
             : 'PENDING';
-      externalId = waited.externalTemplateId || externalId;
-    }
+      let externalId = created.externalTemplateId;
 
-    try {
-      await syncPageUtilityTemplates(params.pageId);
-    } catch {
-      /* best-effort re-sync */
-    }
+      if (status === 'PENDING' && waitForApproved) {
+        const waited = await metaProvider.waitForUtilityTemplateApproved({
+          pageId: page.platformPageId,
+          pageAccessToken: token,
+          templateName: name,
+          retries: 40,
+          intervalMs: 3000,
+        });
+        status =
+          waited.status === 'APPROVED'
+            ? 'APPROVED'
+            : waited.status === 'REJECTED'
+              ? 'REJECTED'
+              : 'PENDING';
+        externalId = waited.externalTemplateId || externalId;
+      }
 
-    const row = await persist(status, language, externalId);
-    return {
-      pageId: page.id,
-      status: row.status,
-      language: row.language,
-      externalId: row.externalId || externalId,
-      name,
-      path: 'cold',
-    };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return {
-      pageId: page.id,
-      status: 'error',
-      language,
-      externalId: '',
-      name,
-      path: 'error',
-      error: msg.slice(0, 400),
-    };
+      try {
+        await syncPageUtilityTemplates(params.pageId);
+      } catch {
+        /* best-effort re-sync */
+      }
+
+      const row = await persist(status, language, externalId);
+      return {
+        pageId: page.id,
+        status: row.status,
+        language: row.language,
+        externalId: row.externalId || externalId,
+        name,
+        path: 'cold',
+      };
+    } catch (err) {
+      lastErr = err instanceof Error ? err.message : String(err);
+      logger.warn({ err, pageId: params.pageId, language, name }, 'named UTILITY create attempt failed');
+    }
   }
+
+  return {
+    pageId: page.id,
+    status: 'error',
+    language: preferred,
+    externalId: '',
+    name,
+    path: 'error',
+    error: lastErr.slice(0, 400),
+  };
 }
 
 const createCampaignSchema = z.object({
@@ -842,8 +848,8 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
           pageId: page.platformPageId,
           pageAccessToken: token,
           templateName: name,
-          retries: 15,
-          intervalMs: 4000,
+          retries: 40,
+          intervalMs: 3000,
         });
         created = {
           externalTemplateId: waited.externalTemplateId || created.externalTemplateId,
@@ -1044,6 +1050,20 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
     const approved = results.filter((r) => r.status === 'APPROVED').length;
     const pending = results.filter((r) => r.status === 'PENDING').length;
     const failed = results.filter((r) => r.status === 'error' || r.status === 'REJECTED').length;
+    const firstError = results.find((r) => r.error)?.error;
+    // Keep Instant ensure polling in background when Meta is still reviewing.
+    if (usePlain && pending > 0) {
+      for (const [i, pageId] of body.page_ids.entries()) {
+        const hit = results.find((r) => r.page_id === pageId);
+        if (hit?.status === 'PENDING') {
+          void enqueueUtilityEnsure(pageId, {
+            waitForApproved: true,
+            userId: user.id,
+            delayMs: 500 + i * 400,
+          }).catch(() => undefined);
+        }
+      }
+    }
     return {
       results,
       approved,
@@ -1054,8 +1074,9 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
         approved > 0
           ? `Approved on ${approved} of ${body.page_ids.length} page${body.page_ids.length === 1 ? '' : 's'}.`
           : pending > 0
-            ? 'Waiting for Meta approval — keep this window open.'
-            : 'Could not approve template on selected pages.',
+            ? 'Meta is still reviewing this template — keep this window open. Reconnect is not required while status is Pending.'
+            : firstError ||
+              'Could not approve template on selected pages. Check the Meta error below.',
     };
   });
 
