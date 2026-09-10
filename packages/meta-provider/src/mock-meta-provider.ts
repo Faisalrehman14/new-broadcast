@@ -181,6 +181,7 @@ export class MockMetaProvider implements MetaProvider {
     pageId: string;
     pageAccessToken: string;
     name?: string;
+    deepScan?: boolean;
   }): Promise<MetaUtilityTemplateSummary[]> {
     const out: MetaUtilityTemplateSummary[] = [];
     for (const [id, cur] of this.store) {

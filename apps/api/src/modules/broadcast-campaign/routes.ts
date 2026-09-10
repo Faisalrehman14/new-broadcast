@@ -25,8 +25,8 @@ import { assertUserOwnsPage } from '../../lib/ownership.js';
 import { logger } from '../../lib/logger.js';
 import { enqueueUtilityEnsure, enqueueUtilityEnsureForUser } from '../../lib/utility-auto.js';
 
-/** HTTP handlers must stay under Railway/proxy timeouts (~30–60s). Worker can poll longer. */
-const HTTP_TEMPLATE_WAIT = { waitRetries: 8, waitIntervalMs: 2500 } as const; // ~20s
+/** HTTP handlers must stay well under Railway/proxy timeouts (~30s). */
+const HTTP_TEMPLATE_WAIT = { waitRetries: 2, waitIntervalMs: 1500 } as const; // ~3s
 const WORKER_TEMPLATE_WAIT = { waitRetries: 40, waitIntervalMs: 3000 } as const; // ~2min
 
 async function remintPageAccessToken(page: {
@@ -73,9 +73,23 @@ async function ensurePlainUtilityOnPage(
   const waitForApproved = opts?.waitForApproved ?? false;
   const waitRetries = opts?.waitRetries ?? HTTP_TEMPLATE_WAIT.waitRetries;
   const waitIntervalMs = opts?.waitIntervalMs ?? HTTP_TEMPLATE_WAIT.waitIntervalMs;
-  const page = await prisma.facebookPage.findUniqueOrThrow({ where: { id: pageId } });
   const name = PLAIN_UTILITY_TEMPLATE_NAME;
   const tplBody = PLAIN_UTILITY_BODY;
+
+  const dbApproved = await prisma.pageUtilityTemplate.findFirst({
+    where: { pageId, templateName: name, status: 'APPROVED' },
+    orderBy: { updatedAt: 'desc' },
+  });
+  if (dbApproved) {
+    return {
+      pageId,
+      status: 'APPROVED',
+      language: dbApproved.language || 'en',
+      externalId: dbApproved.externalId || `utility_${name}`,
+    };
+  }
+
+  const page = await prisma.facebookPage.findUniqueOrThrow({ where: { id: pageId } });
   const token = await remintPageAccessToken(page);
 
   const persist = async (
@@ -151,6 +165,7 @@ async function ensurePlainUtilityOnPage(
         pageId: page.platformPageId,
         pageAccessToken: token,
         name,
+        deepScan: true,
       });
       const hit =
         listed.find((t) => t.name === name && t.status === 'APPROVED') ||
@@ -200,13 +215,19 @@ async function ensurePlainUtilityOnPage(
   };
 }
 
-/** Page Instant–style: pull all Meta message_templates into page_utility_templates. */
-async function syncPageUtilityTemplates(pageId: string): Promise<{ upserted: number }> {
+/** Page Instant–style: pull Meta message_templates into page_utility_templates. */
+async function syncPageUtilityTemplates(
+  pageId: string,
+  opts?: { templateName?: string }
+): Promise<{ upserted: number }> {
   const page = await prisma.facebookPage.findUniqueOrThrow({ where: { id: pageId } });
   const token = await remintPageAccessToken(page);
   const listed = await metaProvider.listMessageTemplates({
     pageId: page.platformPageId,
     pageAccessToken: token,
+    name: opts?.templateName,
+    // Name-scoped: light. Full inventory: bounded deep scan.
+    deepScan: !opts?.templateName,
   });
   let upserted = 0;
   for (const t of listed) {
@@ -241,9 +262,8 @@ async function syncPageUtilityTemplates(pageId: string): Promise<{ upserted: num
 }
 
 /**
- * Warm: reuse APPROVED Meta template after sync.
- * Cold: create UTILITY + wait until APPROVED (Page Instant deploy path).
- * Tries `en` then `en_US` — Meta stores locales distinctly; UI used to send only `en`.
+ * Warm: reuse APPROVED Meta template (DB first — no full Meta inventory on every pick).
+ * Cold: create UTILITY + short wait; long poll continues in background.
  */
 async function ensureNamedUtilityOnPage(params: {
   pageId: string;
@@ -254,6 +274,8 @@ async function ensureNamedUtilityOnPage(params: {
   waitForApproved?: boolean;
   waitRetries?: number;
   waitIntervalMs?: number;
+  /** Skip expensive full inventory sync (default true for HTTP library path). */
+  skipFullSync?: boolean;
 }): Promise<{
   pageId: string;
   status: string;
@@ -270,11 +292,51 @@ async function ensureNamedUtilityOnPage(params: {
   const tplBody = params.body;
   const preferred = (params.language || 'en').trim() || 'en';
   const langs = Array.from(new Set([preferred, 'en', 'en_US']));
+  const skipFullSync = params.skipFullSync !== false;
 
-  try {
-    await syncPageUtilityTemplates(params.pageId);
-  } catch (err) {
-    logger.warn({ err, pageId: params.pageId }, 'utility sync before ensure failed');
+  // Fast path: library already approved this name on this Page.
+  const dbApproved = await prisma.pageUtilityTemplate.findFirst({
+    where: { pageId: params.pageId, templateName: name, status: 'APPROVED' },
+    orderBy: { updatedAt: 'desc' },
+  });
+  if (dbApproved) {
+    return {
+      pageId: params.pageId,
+      status: 'APPROVED',
+      language: dbApproved.language || preferred,
+      externalId: dbApproved.externalId || `utility_${name}`,
+      name,
+      path: 'warm',
+    };
+  }
+
+  if (!skipFullSync) {
+    try {
+      await syncPageUtilityTemplates(params.pageId);
+    } catch (err) {
+      logger.warn({ err, pageId: params.pageId }, 'utility sync before ensure failed');
+    }
+  } else {
+    try {
+      await syncPageUtilityTemplates(params.pageId, { templateName: name });
+    } catch (err) {
+      logger.warn({ err, pageId: params.pageId, name }, 'named utility light sync failed');
+    }
+  }
+
+  const again = await prisma.pageUtilityTemplate.findFirst({
+    where: { pageId: params.pageId, templateName: name, status: 'APPROVED' },
+    orderBy: { updatedAt: 'desc' },
+  });
+  if (again) {
+    return {
+      pageId: params.pageId,
+      status: 'APPROVED',
+      language: again.language || preferred,
+      externalId: again.externalId || `utility_${name}`,
+      name,
+      path: 'warm',
+    };
   }
 
   const page = await prisma.facebookPage.findUniqueOrThrow({ where: { id: params.pageId } });
@@ -293,6 +355,7 @@ async function ensureNamedUtilityOnPage(params: {
       pageId: page.platformPageId,
       pageAccessToken: token,
       name,
+      deepScan: true,
     });
     existing =
       listed.find((t) => t.name === name && t.status === 'APPROVED') ||
@@ -410,7 +473,7 @@ async function ensureNamedUtilityOnPage(params: {
       }
 
       try {
-        await syncPageUtilityTemplates(params.pageId);
+        await syncPageUtilityTemplates(params.pageId, { templateName: name });
       } catch {
         /* best-effort re-sync */
       }
@@ -954,7 +1017,7 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
         await assertUserOwnsPage(user.id, pageId);
         const page = await prisma.facebookPage.findUnique({ where: { id: pageId } });
         try {
-          await syncPageUtilityTemplates(pageId);
+          await syncPageUtilityTemplates(pageId, { templateName: PLAIN_UTILITY_TEMPLATE_NAME });
         } catch (err) {
           logger.warn({ err, pageId }, 'prepare-instant sync skipped');
         }
@@ -1039,34 +1102,36 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
           await assertUserOwnsPage(user.id, pageId);
           const page = await prisma.facebookPage.findUnique({ where: { id: pageId } });
 
-          if (usePlain) {
-            let upserted = 0;
-            try {
-              upserted = (await syncPageUtilityTemplates(pageId)).upserted;
-            } catch (err) {
-              logger.warn({ err, pageId }, 'ensure-library plain sync failed');
-            }
-            const result = await ensurePlainUtilityOnPage(pageId, {
-              waitForApproved: true,
-              ...HTTP_TEMPLATE_WAIT,
-            });
-            if (result.status === 'PENDING') {
-              void ensurePlainUtilityOnPage(pageId, {
-                waitForApproved: true,
-                ...WORKER_TEMPLATE_WAIT,
-              }).catch((err) => logger.warn({ err, pageId }, 'bg ensure-library plain wait failed'));
-            }
-            return {
-              page_id: pageId,
-              page_name: page?.name,
-              status: result.status,
-              name: PLAIN_UTILITY_TEMPLATE_NAME,
-              path:
-                result.status === 'APPROVED' ? 'warm' : result.status === 'error' ? 'error' : 'cold',
-              error: result.error,
-              upserted,
-            };
+        if (usePlain) {
+          let upserted = 0;
+          try {
+            upserted = (await syncPageUtilityTemplates(pageId, {
+              templateName: PLAIN_UTILITY_TEMPLATE_NAME,
+            })).upserted;
+          } catch (err) {
+            logger.warn({ err, pageId }, 'ensure-library plain sync failed');
           }
+          const result = await ensurePlainUtilityOnPage(pageId, {
+            waitForApproved: true,
+            ...HTTP_TEMPLATE_WAIT,
+          });
+          if (result.status === 'PENDING') {
+            void ensurePlainUtilityOnPage(pageId, {
+              waitForApproved: true,
+              ...WORKER_TEMPLATE_WAIT,
+            }).catch((err) => logger.warn({ err, pageId }, 'bg ensure-library plain wait failed'));
+          }
+          return {
+            page_id: pageId,
+            page_name: page?.name,
+            status: result.status,
+            name: PLAIN_UTILITY_TEMPLATE_NAME,
+            path:
+              result.status === 'APPROVED' ? 'warm' : result.status === 'error' ? 'error' : 'cold',
+            error: result.error,
+            upserted,
+          };
+        }
 
           const result = await ensureNamedUtilityOnPage({
             pageId,
@@ -1075,6 +1140,7 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
             language: body.language || 'en',
             exampleValues: body.example_values,
             waitForApproved: true,
+            skipFullSync: true,
             ...HTTP_TEMPLATE_WAIT,
           });
           if (result.status === 'PENDING') {
@@ -1085,6 +1151,7 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
               language: body.language || 'en',
               exampleValues: body.example_values,
               waitForApproved: true,
+              skipFullSync: true,
               ...WORKER_TEMPLATE_WAIT,
             }).catch((err) =>
               logger.warn(
@@ -1188,7 +1255,7 @@ export async function broadcastCampaignRoutes(app: FastifyInstance) {
           const approved = c.page.utilityTemplates.some((t) => t.status === 'APPROVED');
           if (approved) return;
           try {
-            await syncPageUtilityTemplates(c.pageId);
+            await syncPageUtilityTemplates(c.pageId, { templateName });
           } catch (err) {
             logger.warn({ err, pageId: c.pageId }, 'utility-status refresh sync failed');
           }

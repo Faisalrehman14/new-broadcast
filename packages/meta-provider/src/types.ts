@@ -137,6 +137,8 @@ export interface MetaProvider {
     pageId: string;
     pageAccessToken: string;
     name?: string;
+    /** When true and name filter has no APPROVED hit, scan more pages (expensive). Default false. */
+    deepScan?: boolean;
   }): Promise<MetaUtilityTemplateSummary[]>;
   waitForUtilityTemplateApproved(params: {
     pageId: string;

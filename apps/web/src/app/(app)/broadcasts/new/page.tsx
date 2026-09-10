@@ -344,6 +344,33 @@ export default function NewCampaignPage() {
         example_values: tpl.examples.length ? tpl.examples : tpl.parameters,
         instant: usePlain,
       }),
+    }).catch(async (err) => {
+      // One quick retry — Railway edge sometimes kills the first long Meta round-trip.
+      await new Promise((r) => setTimeout(r, 800));
+      return api<{
+        results: Array<{
+          page_id: string;
+          status: string;
+          error?: string;
+          path?: string;
+          name?: string;
+        }>;
+        message?: string;
+        pending?: number;
+        approved?: number;
+      }>('/api/broadcast/ensure-library', {
+        method: 'POST',
+        body: JSON.stringify({
+          page_ids: selected,
+          template_name: metaName,
+          body: metaBody,
+          language: 'en_US',
+          example_values: tpl.examples.length ? tpl.examples : tpl.parameters,
+          instant: usePlain,
+        }),
+      }).catch(() => {
+        throw err;
+      });
     });
 
     let ready = prep.results.filter((r) => r.status === 'APPROVED').length;
@@ -445,13 +472,25 @@ export default function NewCampaignPage() {
               ? `Ready on ${ready} of ${selected.length} page${selected.length === 1 ? '' : 's'}.`
               : `Ready on ${ready} of ${selected.length} — ${pending} still pending.`)
         );
+      } else if (pending > 0) {
+        // Allow field edit / Use while Meta reviews — campaign worker waits for APPROVED.
+        setLibraryApproved(true);
+        setToast(
+          message ||
+            'Meta is still reviewing this template. You can edit fields now — keep this window open.'
+        );
       } else {
         setLibraryApproved(false);
         setError(prepError || message || 'Template not ready on selected pages yet.');
       }
     } catch (err) {
       setLibraryApproved(false);
-      setError(err instanceof Error ? err.message : String(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(
+        /timeout|took too long|Internal Server Error|Server error while talking to Meta/i.test(msg)
+          ? 'Meta took too long to respond. Tap the template again — approval often finishes in the background.'
+          : msg
+      );
     } finally {
       setApproveWait(null);
       setBusy(false);

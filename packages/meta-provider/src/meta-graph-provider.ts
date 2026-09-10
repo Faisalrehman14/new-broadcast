@@ -634,9 +634,10 @@ export class MetaGraphProvider implements MetaProvider {
     pageId: string;
     pageAccessToken: string;
     name?: string;
+    deepScan?: boolean;
   }): Promise<MetaUtilityTemplateSummary[]> {
     const wanted = params.name?.trim();
-    const out: MetaUtilityTemplateSummary[] = [];
+    const deepScan = Boolean(params.deepScan);
 
     const pull = async (opts: { name?: string; maxPages: number }) => {
       let after: string | undefined;
@@ -681,7 +682,6 @@ export class MetaGraphProvider implements MetaProvider {
         }
         after = data.paging?.cursors?.after;
         if (!after || !data.paging?.next) break;
-        // Name-filtered Graph responses are usually a single page; still follow cursors if present.
       }
       return collected;
     };
@@ -689,21 +689,20 @@ export class MetaGraphProvider implements MetaProvider {
     if (wanted) {
       let matches: MetaUtilityTemplateSummary[] = [];
       try {
-        const filtered = await pull({ name: wanted, maxPages: 5 });
+        const filtered = await pull({ name: wanted, maxPages: 3 });
         matches = filtered.filter(
           (t) => t.name === wanted || t.name.toLowerCase() === wanted.toLowerCase()
         );
       } catch (err) {
-        // Name filter often 400s / empties on Pages — fall back to full list below.
         if (!/listMessageTemplates failed/i.test(err instanceof Error ? err.message : '')) {
           throw err;
         }
+        if (!deepScan) return [];
       }
-      // Meta `name=` filter is incomplete across locales — it can return only a PENDING
-      // language while APPROVED exists under the same name. Always full-scan when we
-      // do not already have APPROVED.
-      if (!matches.some((t) => t.status === 'APPROVED')) {
-        const all = await pull({ maxPages: 20 });
+      // Full unfiltered scans blow Railway timeouts when done on every wait poll.
+      // Callers that need locale discovery must pass deepScan: true (once).
+      if (deepScan && !matches.some((t) => t.status === 'APPROVED')) {
+        const all = await pull({ maxPages: 5 });
         const fromAll = all.filter(
           (t) => t.name === wanted || t.name.toLowerCase() === wanted.toLowerCase()
         );
@@ -722,7 +721,7 @@ export class MetaGraphProvider implements MetaProvider {
       return matches;
     }
 
-    return pull({ maxPages: 20 });
+    return pull({ maxPages: deepScan ? 8 : 3 });
   }
 
   async getTemplateStatus(params: {

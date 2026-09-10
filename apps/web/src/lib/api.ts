@@ -107,8 +107,8 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     const fallback =
       res.status === 502 || res.status === 504
         ? 'The server took too long (proxy timeout). Keep this window open and try again — Meta approval often continues in the background.'
-        : res.status === 500 && /internal server error/i.test(plain)
-          ? 'Server error while talking to Meta. Wait a moment and open the template again.'
+        : res.status === 500 && (/internal server error/i.test(plain) || !err?.error?.message)
+          ? 'Meta/API timed out while approving the template. Tap it again in a few seconds.'
           : 'Something went wrong. Please try again.';
     throw new ApiClientError(err?.error?.message || (plain && plain.length < 200 ? plain : fallback), err?.error?.code, res.status);
   }
