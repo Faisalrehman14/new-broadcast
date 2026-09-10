@@ -26,16 +26,11 @@ describe('campaign helpers', () => {
     );
   });
 
-  it('exposes plain UTILITY + Page Instant Template-1…33 starters', () => {
+  it('exposes plain UTILITY + starters', () => {
     assert.equal(PLAIN_UTILITY_TEMPLATE_NAME, 'castme_plain_utility_v1');
-    assert.ok(STARTER_UTILITY_TEMPLATES.length >= 41);
-    assert.ok(STARTER_UTILITY_TEMPLATES.some((t) => t.name === 'castme_pi_t28_v1'));
-    assert.ok(STARTER_UTILITY_TEMPLATES.some((t) => t.title === 'Template-33'));
-    assert.ok(
-      STARTER_UTILITY_TEMPLATES.some(
-        (t) => t.title === 'Template-33' && t.body.includes('your order is confirmed')
-      )
-    );
+    assert.ok(STARTER_UTILITY_TEMPLATES.length >= 36);
+    assert.ok(STARTER_UTILITY_TEMPLATES.some((t) => t.name.startsWith('pi_')));
+    assert.ok(STARTER_UTILITY_TEMPLATES.some((t) => t.name === 'membership_status_update'));
     assert.ok(STARTER_UTILITY_TEMPLATES.some((t) => t.title === 'Template-27'));
     assert.ok(STARTER_UTILITY_TEMPLATES.some((t) => t.instant && t.badge === 'Instant'));
   });

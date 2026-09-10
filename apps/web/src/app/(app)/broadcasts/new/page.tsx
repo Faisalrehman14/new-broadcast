@@ -319,8 +319,8 @@ export default function NewCampaignPage() {
 
     setApproveWait(
       usePlain
-        ? 'Preparing Instant send… usually under a minute.'
-        : "If this template hasn't been used on your page yet, Meta approval usually takes 30–60 seconds."
+        ? 'Preparing Instant send… Meta review can take 1–2 minutes.'
+        : 'Approving with Meta… usually 1–2 minutes. Keep this open.'
     );
 
     const prep = await api<{

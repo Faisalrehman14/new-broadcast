@@ -200,11 +200,10 @@ export function LibraryModal({
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 sm:px-5">
           <div className="min-w-0">
             <h2 id="library-title" className="text-lg font-semibold tracking-tight text-slate-900">
-              Choose from Library
+              Template library
             </h2>
-            <p className="mt-1 text-sm text-slate-500">
-              Preview a template and pick one. If it&apos;s never been used on this page, we&apos;ll
-              submit it to Meta and wait here for approval.
+            <p className="mt-0.5 text-sm text-slate-500">
+              Read the full message, fill variables, check the live preview.
             </p>
           </div>
           <div className="flex w-full items-center gap-2 sm:w-auto">
@@ -226,20 +225,13 @@ export function LibraryModal({
           </div>
         </div>
 
-        <div className="shrink-0 border-b border-amber-200/80 bg-amber-50 px-4 py-2.5 text-sm text-amber-950 sm:px-5">
-          If this template has never been used on your page, approval usually takes{' '}
-          <span className="font-semibold">30–60 seconds</span>. Please don&apos;t close this window.
-        </div>
-
         <div className="relative grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.95fr)]">
           {approveWait ? (
             <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-white/92 px-6 text-center backdrop-blur-sm">
               <div className="h-11 w-11 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-              <p className="text-sm font-semibold text-slate-900">Waiting for Meta approval…</p>
+              <p className="text-sm font-semibold text-slate-900">Checking template approval…</p>
               <p className="max-w-sm text-sm text-slate-600">{approveWait}</p>
-              <p className="text-xs text-amber-700">
-                Usually 30–60 seconds. Keep this window open — same as Page Instant.
-              </p>
+              <p className="text-xs text-amber-700">Keep this window open.</p>
             </div>
           ) : null}
 
