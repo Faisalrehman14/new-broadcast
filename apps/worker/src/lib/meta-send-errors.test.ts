@@ -30,6 +30,29 @@ describe('classifyMetaSendError', () => {
     const err = Object.assign(new Error('rate limited'), { status: 429, retryable: true });
     const c = classifyMetaSendError(err);
     assert.equal(c.retryable, true);
+    assert.equal(c.reason, 'rate_limited');
+  });
+
+  it('retries Pages BUC 80001 and Platform 32', () => {
+    const buc = Object.assign(
+      new Error(
+        'Meta send failed: 400 {"error":{"message":"(#80001) There have been too many calls to this Page account.","code":80001}}'
+      ),
+      { code: 80001, status: 400, retryable: true }
+    );
+    const c1 = classifyMetaSendError(buc);
+    assert.equal(c1.retryable, true);
+    assert.equal(c1.reason, 'rate_limited');
+
+    const page = Object.assign(
+      new Error(
+        'Meta send failed: 400 {"error":{"message":"(#32) Page request limit reached","code":32}}'
+      ),
+      { code: 32, status: 400, retryable: true }
+    );
+    const c2 = classifyMetaSendError(page);
+    assert.equal(c2.retryable, true);
+    assert.equal(c2.reason, 'rate_limited');
   });
 
   it('treats 10/2018108 as unavailable, not outside window', () => {

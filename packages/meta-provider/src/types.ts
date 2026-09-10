@@ -68,6 +68,8 @@ export interface MetaSendResponseInput {
 export interface MetaSendResult {
   messageId: string;
   recipientId: string;
+  /** Present when Meta returned Platform/BUC usage headers on the send response. */
+  metaRateLimit?: import('./rate-limit.js').MetaRateLimitSnapshot;
 }
 
 export type MetaTemplateExternalStatus =

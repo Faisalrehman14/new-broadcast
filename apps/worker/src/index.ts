@@ -7,16 +7,22 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 import { Redis } from 'ioredis';
-import { Worker, Queue, type Job } from 'bullmq';
+import { Worker, Queue, DelayedError, type Job } from 'bullmq';
 import { PrismaClient } from '@prisma/client';
 import { personalizeBroadcastMessage } from './lib/personalize.js';
-import { acquirePageSendSlot } from './lib/send-gate.js';
+import {
+  acquirePageSendSlot,
+  configureSendGateRedis,
+  pageCooldownRemainingMs,
+  recordPageMetaUsage,
+} from './lib/send-gate.js';
 import { classifyMetaSendError } from './lib/meta-send-errors.js';
 import {
   assessPageUtilityEligibility,
   PAGE_UTILITY_PICKER_MESSAGE,
 } from './lib/page-utility-health.js';
 import { ensurePlainUtilityForPage } from './lib/ensure-plain-utility.js';
+import type { MetaRateLimitSnapshot } from '@pagebroadcast/meta-provider';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
@@ -27,6 +33,7 @@ const config = loadWorkerConfig(process.env);
 const logger = pino({ level: config.LOG_LEVEL, base: { service: 'castmepro-worker' } });
 const prisma = new PrismaClient();
 const connection = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
+configureSendGateRedis(connection);
 
 const meta = createMetaProvider(config.META_PROVIDER, {
   appId: config.META_APP_ID,
@@ -664,7 +671,7 @@ async function enqueueCampaignSends(
             delay: i * delay,
             jobId: `csend-${r.id}${jobIdSuffix}`,
             attempts: 5,
-            backoff: { type: 'exponential', delay: 2000 },
+            backoff: { type: 'exponential', delay: 5000 },
             removeOnComplete: 1000,
             removeOnFail: 5000,
           }
@@ -1353,13 +1360,15 @@ async function handleCampaignSend(job: Job) {
 
     const token = await resolveCampaignPageToken(cp);
 
-    let result: { messageId: string };
+    let result: { messageId: string; metaRateLimit?: MetaRateLimitSnapshot };
     // Delivery strategy (Page Instant–style):
     // 1) If we think contact is in-window → RESPONSE (no Utility needed)
     // 2) If RESPONSE hits outside-window → fall back to Instant/named UTILITY
     // 3) If clearly outside-window → UTILITY directly
     // Never invent in-window from missing timestamps (null = outside → UTILITY).
-    const tryUtility = async (pageToken: string): Promise<{ messageId: string }> => {
+    const tryUtility = async (
+      pageToken: string
+    ): Promise<{ messageId: string; metaRateLimit?: MetaRateLimitSnapshot }> => {
       const sendUtility = async (
         tok: string,
         name: string,
@@ -1478,6 +1487,8 @@ async function handleCampaignSend(job: Job) {
                     code: (plainErr as Error & { code?: number }).code,
                     subcode: (plainErr as Error & { subcode?: number }).subcode,
                     retryable: (plainErr as Error & { retryable?: boolean }).retryable,
+                    metaRateLimit: (plainErr as Error & { metaRateLimit?: MetaRateLimitSnapshot })
+                      .metaRateLimit,
                   }
                 : {}
             );
@@ -1494,6 +1505,8 @@ async function handleCampaignSend(job: Job) {
                 code: (utilErr as Error & { code?: number }).code,
                 subcode: (utilErr as Error & { subcode?: number }).subcode,
                 retryable: (utilErr as Error & { retryable?: boolean }).retryable,
+                metaRateLimit: (utilErr as Error & { metaRateLimit?: MetaRateLimitSnapshot })
+                  .metaRateLimit,
               }
             : {}
         );
@@ -1571,6 +1584,18 @@ async function handleCampaignSend(job: Job) {
         data: { sentCount: { increment: 1 }, queuedCount: { decrement: 1 } },
       }),
     ]);
+    if (result.metaRateLimit) {
+      const usage = await recordPageMetaUsage(cp.platformPageId, result.metaRateLimit);
+      if (usage.cooldownMs > 0) {
+        const mins = Math.max(1, Math.ceil(usage.cooldownMs / 60_000));
+        await prisma.broadcastCampaign.update({
+          where: { id: campaignId },
+          data: {
+            phaseMessage: `Paused sending on ${cp.pageName} — Meta rate limit, resuming in ~${mins} min`,
+          },
+        });
+      }
+    }
   } catch (err) {
     await refundQuota(campaign.userId, quotaUnits);
     let classified = classifyMetaSendError(err);
@@ -1590,10 +1615,31 @@ async function handleCampaignSend(job: Job) {
     }
 
     if (classified.retryable) {
+      const snap =
+        (err as Error & { metaRateLimit?: MetaRateLimitSnapshot })?.metaRateLimit || undefined;
+      const throttled = classified.reason === 'rate_limited';
+      const usage = await recordPageMetaUsage(cp.platformPageId, snap, { throttled });
+      const coolLeft =
+        usage.cooldownMs ||
+        (err as Error & { cooldownMs?: number }).cooldownMs ||
+        (await pageCooldownRemainingMs(cp.platformPageId));
+      if (throttled || coolLeft > 0) {
+        const mins = Math.max(1, Math.ceil(Math.max(coolLeft, 15_000) / 60_000));
+        await prisma.broadcastCampaign.update({
+          where: { id: campaignId },
+          data: {
+            phaseMessage: `Paused sending on ${cp.pageName} — Meta rate limit, resuming in ~${mins} min`,
+          },
+        });
+      }
       await prisma.broadcastCampaignRecipient.update({
         where: { id: recipientId },
         data: { status: 'RETRYING', failureReason: classified.reason },
       });
+      if (coolLeft > 2000 && job.token) {
+        await job.moveToDelayed(Date.now() + coolLeft, job.token);
+        throw new DelayedError();
+      }
       throw err;
     }
 

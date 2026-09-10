@@ -3,6 +3,7 @@ import { MockMetaProvider } from './mock-meta-provider.js';
 import type { MetaProvider, MetaProviderConfig } from './types.js';
 
 export * from './types.js';
+export * from './rate-limit.js';
 export { MetaGraphProvider } from './meta-graph-provider.js';
 export { MockMetaProvider } from './mock-meta-provider.js';
 

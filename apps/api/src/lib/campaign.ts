@@ -87,18 +87,18 @@ export async function findActiveCampaign(userId: string) {
 
 export function speedToDelayMs(preset?: string, delayMs?: number): { speedPreset: string; delayMs: number } {
   if (typeof delayMs === 'number' && delayMs >= 0) {
-    return { speedPreset: preset || 'custom', delayMs };
+    return { speedPreset: preset || 'custom', delayMs: Math.max(100, delayMs) };
   }
   switch (preset) {
     case 'balanced':
-      return { speedPreset: 'balanced', delayMs: 300 };
+      return { speedPreset: 'balanced', delayMs: 400 };
     case 'fast':
-      return { speedPreset: 'fast', delayMs: 150 };
+      return { speedPreset: 'fast', delayMs: 250 };
     case 'turbo':
-      return { speedPreset: 'turbo', delayMs: 80 };
+      return { speedPreset: 'turbo', delayMs: 150 };
     case 'safe':
     default:
-      return { speedPreset: 'safe', delayMs: 600 };
+      return { speedPreset: 'safe', delayMs: 800 };
   }
 }
 

@@ -38,10 +38,15 @@ type Campaign = {
 
 function phaseHint(phase: string, active?: boolean) {
   if (!active) return '';
-  if (phase === 'setting_up_templates') return 'Preparing templates…';
-  if (phase === 'syncing_leads') return 'Syncing audience…';
-  if (phase === 'sending') return 'Delivering…';
-  return 'Working…';
+  if (phase === 'sending') return 'Messages are going out — keep this tab open to watch progress.';
+  if (phase === 'setting_up_templates') return 'Preparing UTILITY templates on each Page…';
+  if (phase === 'syncing_leads') return 'Syncing Messenger audience…';
+  if (phase === 'queued') return 'Queued — worker will start shortly.';
+  return '';
+}
+
+function isMetaRateLimitMessage(msg?: string | null) {
+  return /rate limit|resuming in|Meta rate|cooled down|Paused sending/i.test(msg || '');
 }
 
 export default function CampaignDetailPage() {
@@ -104,7 +109,10 @@ export default function CampaignDetailPage() {
   const processedPct = Math.min(100, Math.round((processed / total) * 100));
   const title =
     (campaign.message || '').trim().slice(0, 72) || `Campaign ${campaign.id.slice(0, 8)}`;
-  const hint = phaseHint(campaign.phase, campaign.active);
+  const hint = isMetaRateLimitMessage(campaign.phaseMessage)
+    ? 'Meta asked us to slow down on this Page. Sends pause briefly, then resume automatically — keep hammering would make the cooldown longer.'
+    : phaseHint(campaign.phase, campaign.active);
+  const rateLimited = isMetaRateLimitMessage(campaign.phaseMessage);
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -152,11 +160,13 @@ export default function CampaignDetailPage() {
 
       <div
         className={`rounded-2xl border px-4 py-3 text-sm ${
-          campaign.active
-            ? 'border-blue-200 bg-blue-50 text-blue-950'
-            : campaign.phase === 'failed'
-              ? 'border-red-200 bg-red-50 text-red-900'
-              : 'border-slate-200 bg-white text-slate-800'
+          rateLimited
+            ? 'border-amber-300 bg-amber-50 text-amber-950'
+            : campaign.active
+              ? 'border-blue-200 bg-blue-50 text-blue-950'
+              : campaign.phase === 'failed'
+                ? 'border-red-200 bg-red-50 text-red-900'
+                : 'border-slate-200 bg-white text-slate-800'
         }`}
       >
         <p className="font-medium">{campaign.phaseMessage || campaign.phase}</p>

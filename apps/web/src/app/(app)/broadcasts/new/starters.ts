@@ -78,8 +78,8 @@ export function mergeStarters(
 }
 
 export const SPEED_PRESETS = [
-  { id: 'safe' as const, label: 'Safe', hint: '600ms · gentlest on Meta limits' },
-  { id: 'balanced' as const, label: 'Balanced', hint: '300ms · recommended' },
-  { id: 'fast' as const, label: 'Fast', hint: '150ms · higher throughput' },
-  { id: 'turbo' as const, label: 'Turbo', hint: '80ms · max speed' },
+  { id: 'safe' as const, label: 'Safe', hint: '800ms · gentlest on Meta Pages limits' },
+  { id: 'balanced' as const, label: 'Balanced', hint: '400ms · recommended (spread evenly)' },
+  { id: 'fast' as const, label: 'Fast', hint: '250ms · still under per-Page RPS gate' },
+  { id: 'turbo' as const, label: 'Turbo', hint: '150ms · capped — avoid Meta throttle spikes' },
 ];

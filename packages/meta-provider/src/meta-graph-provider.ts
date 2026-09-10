@@ -15,6 +15,10 @@ import {
   type MetaTemplateStatus,
   type MetaUtilityTemplateSummary,
 } from './types.js';
+import {
+  parseMetaRateLimitHeaders,
+  type MetaRateLimitSnapshot,
+} from './rate-limit.js';
 
 /**
  * Production Meta Graph API provider.
@@ -456,7 +460,7 @@ export class MetaGraphProvider implements MetaProvider {
         ) {
           throw err;
         }
-        if (/"code"\s*:\s*(4|17|32|613)\b|rate limit|code.: ?(4|17)\b/i.test(text)) {
+        if (/"code"\s*:\s*(4|17|32|613|80001|80006)\b|rate limit|code.: ?(4|17)\b/i.test(text)) {
           throw err;
         }
       }
@@ -483,7 +487,7 @@ export class MetaGraphProvider implements MetaProvider {
           ) {
             throw err;
           }
-          if (/"code"\s*:\s*(4|17|32|613)\b|rate limit|code.: ?(4|17)\b/i.test(text)) {
+          if (/"code"\s*:\s*(4|17|32|613|80001|80006)\b|rate limit|code.: ?(4|17)\b/i.test(text)) {
             throw err;
           }
         }
@@ -802,11 +806,16 @@ export class MetaGraphProvider implements MetaProvider {
       },
       body: JSON.stringify(payload),
     });
+    const metaRateLimit = parseMetaRateLimitHeaders(res.headers);
     if (!res.ok) {
-      throw buildMetaSendError(res.status, await res.text());
+      throw buildMetaSendError(res.status, await res.text(), metaRateLimit);
     }
     const data = (await res.json()) as { message_id: string; recipient_id: string };
-    return { messageId: data.message_id, recipientId: data.recipient_id };
+    return {
+      messageId: data.message_id,
+      recipientId: data.recipient_id,
+      metaRateLimit,
+    };
   }
 
   /** Form-urlencoded send — same transport as working Messenger broadcast tools. */
@@ -840,21 +849,27 @@ export class MetaGraphProvider implements MetaProvider {
       },
       body: form.toString(),
     });
+    const metaRateLimit = parseMetaRateLimitHeaders(res.headers);
     if (!res.ok) {
-      throw buildMetaSendError(res.status, await res.text());
+      throw buildMetaSendError(res.status, await res.text(), metaRateLimit);
     }
     const data = (await res.json()) as { message_id?: string; recipient_id?: string; error?: unknown };
     if (data.error) {
-      throw buildMetaSendError(400, JSON.stringify({ error: data.error }));
+      throw buildMetaSendError(400, JSON.stringify({ error: data.error }), metaRateLimit);
     }
     return {
       messageId: data.message_id || idempotencyKey,
       recipientId: data.recipient_id || recipientId,
+      metaRateLimit,
     };
   }
 }
 
-function buildMetaSendError(status: number, errText: string): Error {
+function buildMetaSendError(
+  status: number,
+  errText: string,
+  metaRateLimit?: MetaRateLimitSnapshot
+): Error {
   let code: number | undefined;
   let subcode: number | undefined;
   try {
@@ -874,10 +889,12 @@ function buildMetaSendError(status: number, errText: string): Error {
     retryable?: boolean;
     code?: number;
     subcode?: number;
+    metaRateLimit?: MetaRateLimitSnapshot;
   };
   err.status = status;
   err.code = code;
   err.subcode = subcode;
+  if (metaRateLimit) err.metaRateLimit = metaRateLimit;
   err.retryable =
     status === 429 ||
     status >= 500 ||

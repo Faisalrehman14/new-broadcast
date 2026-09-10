@@ -446,7 +446,7 @@ const createCampaignSchema = z.object({
   message: z.string().max(2000).optional(),
   image_url: z.string().url().optional().or(z.literal('').transform(() => undefined)),
   speed_preset: z.enum(['safe', 'balanced', 'fast', 'turbo', 'custom']).optional(),
-  delay_ms: z.number().int().min(0).max(60_000).optional(),
+  delay_ms: z.number().int().min(100).max(60_000).optional(),
   utility_template: z
     .object({
       id: z.string().optional(),
