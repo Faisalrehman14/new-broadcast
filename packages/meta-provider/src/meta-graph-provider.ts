@@ -683,23 +683,39 @@ export class MetaGraphProvider implements MetaProvider {
     };
 
     if (wanted) {
+      let matches: MetaUtilityTemplateSummary[] = [];
       try {
         const filtered = await pull({ name: wanted, maxPages: 5 });
-        const matches = filtered.filter(
+        matches = filtered.filter(
           (t) => t.name === wanted || t.name.toLowerCase() === wanted.toLowerCase()
         );
-        if (matches.length) return matches;
       } catch (err) {
         // Name filter often 400s / empties on Pages — fall back to full list below.
         if (!/listMessageTemplates failed/i.test(err instanceof Error ? err.message : '')) {
           throw err;
         }
       }
-      // Meta name= filter is unreliable — scan unfiltered and match client-side.
-      const all = await pull({ maxPages: 20 });
-      return all.filter(
-        (t) => t.name === wanted || t.name.toLowerCase() === wanted.toLowerCase()
-      );
+      // Meta `name=` filter is incomplete across locales — it can return only a PENDING
+      // language while APPROVED exists under the same name. Always full-scan when we
+      // do not already have APPROVED.
+      if (!matches.some((t) => t.status === 'APPROVED')) {
+        const all = await pull({ maxPages: 20 });
+        const fromAll = all.filter(
+          (t) => t.name === wanted || t.name.toLowerCase() === wanted.toLowerCase()
+        );
+        if (fromAll.length) {
+          const byKey = new Map<string, MetaUtilityTemplateSummary>();
+          for (const t of [...matches, ...fromAll]) {
+            const key = `${t.id || t.name}:${t.language || ''}`;
+            const prev = byKey.get(key);
+            if (!prev || (t.status === 'APPROVED' && prev.status !== 'APPROVED')) {
+              byKey.set(key, t);
+            }
+          }
+          return [...byKey.values()];
+        }
+      }
+      return matches;
     }
 
     return pull({ maxPages: 20 });

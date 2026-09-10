@@ -592,7 +592,7 @@ export default function NewCampaignPage() {
                   id: applied.id,
                   name: applied.name,
                   body: applied.body,
-                  language: 'en',
+                  language: 'en_US',
                   parameters: slots.length ? slots : applied.examples,
                 }
               : undefined,

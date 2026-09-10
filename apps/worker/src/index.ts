@@ -810,7 +810,18 @@ async function handleCampaignRun(job: Job) {
       let activeTemplateBody =
         templateName === PLAIN_UTILITY_TEMPLATE_NAME ? PLAIN_UTILITY_BODY : templateBody;
 
-      // Prefer listing an existing approved template before creating.
+      // Library approve already wrote APPROVED into our DB — trust it and skip Meta wait.
+      // Re-waiting here is what left campaigns stuck on "waiting for Meta to approve…"
+      // with delivered/queued still 0 while the template was already green in the UI.
+      const dbApproved = await prisma.pageUtilityTemplate.findFirst({
+        where: {
+          pageId: cp.pageId,
+          templateName: activeTemplateName,
+          status: 'APPROVED',
+        },
+        orderBy: { updatedAt: 'desc' },
+      });
+
       let listed = await meta.listMessageTemplates({
         pageId: cp.platformPageId,
         pageAccessToken: token,
@@ -821,20 +832,50 @@ async function handleCampaignRun(job: Job) {
         listed.find((t) => t.name === activeTemplateName) ||
         listed.find((t) => t.name.toLowerCase() === activeTemplateName.toLowerCase());
 
+      if (dbApproved && (!existing || existing.status !== 'APPROVED')) {
+        existing = {
+          id: dbApproved.externalId || `utility_${activeTemplateName}`,
+          name: activeTemplateName,
+          status: 'APPROVED',
+          language: dbApproved.language || language,
+        };
+        logger.info(
+          { pageId: cp.pageId, campaignId, templateName: activeTemplateName },
+          'using DB APPROVED UTILITY — skipping Meta re-approval wait'
+        );
+      }
+
       // Named starter still pending? Fall back to shared Instant plain if already APPROVED.
       if (
         (!existing || existing.status !== 'APPROVED') &&
         activeTemplateName !== PLAIN_UTILITY_TEMPLATE_NAME &&
         campaign.message
       ) {
+        const plainDb = await prisma.pageUtilityTemplate.findFirst({
+          where: {
+            pageId: cp.pageId,
+            templateName: PLAIN_UTILITY_TEMPLATE_NAME,
+            status: 'APPROVED',
+          },
+          orderBy: { updatedAt: 'desc' },
+        });
         const plainListed = await meta.listMessageTemplates({
           pageId: cp.platformPageId,
           pageAccessToken: token,
           name: PLAIN_UTILITY_TEMPLATE_NAME,
         });
-        const plainOk = plainListed.find(
-          (t) => t.name === PLAIN_UTILITY_TEMPLATE_NAME && t.status === 'APPROVED'
-        );
+        const plainOk =
+          plainListed.find(
+            (t) => t.name === PLAIN_UTILITY_TEMPLATE_NAME && t.status === 'APPROVED'
+          ) ||
+          (plainDb
+            ? {
+                id: plainDb.externalId || `utility_${PLAIN_UTILITY_TEMPLATE_NAME}`,
+                name: PLAIN_UTILITY_TEMPLATE_NAME,
+                status: 'APPROVED' as const,
+                language: plainDb.language || 'en',
+              }
+            : undefined);
         if (plainOk) {
           activeTemplateName = PLAIN_UTILITY_TEMPLATE_NAME;
           activeTemplateBody = PLAIN_UTILITY_BODY;
@@ -848,7 +889,7 @@ async function handleCampaignRun(job: Job) {
       }
 
       // Prefer Meta's stored language (often `en`) over campaign default `en_US`.
-      let resolvedLanguage = existing?.language || language;
+      let resolvedLanguage = existing?.language || dbApproved?.language || language;
       if (!existing && resolvedLanguage === 'en_US') resolvedLanguage = 'en';
 
       let created: { externalTemplateId: string; status: string };
@@ -875,21 +916,21 @@ async function handleCampaignRun(job: Job) {
         });
       }
 
-      // Wait until Meta reports a real APPROVED/REJECTED (incl. UNKNOWN/PENDING).
-      // Instant plain is usually fast; named starters may need the full poll.
+      // Short poll only — never block campaign setup for ~2 minutes when Meta is slow.
+      // Audience sync must proceed; outside-24h sends stay gated by templateReady.
       if (created.status !== 'APPROVED' && created.status !== 'REJECTED') {
         await prisma.broadcastCampaign.update({
           where: { id: campaignId },
           data: {
-            phaseMessage: `Still working — waiting for Meta to approve UTILITY on ${cp.pageName}…`,
+            phaseMessage: `Still working — checking UTILITY on ${cp.pageName}…`,
           },
         });
         const waited = await meta.waitForUtilityTemplateApproved({
           pageId: cp.platformPageId,
           pageAccessToken: token,
           templateName: activeTemplateName,
-          retries: activeTemplateName === PLAIN_UTILITY_TEMPLATE_NAME ? 20 : 40,
-          intervalMs: 3000,
+          retries: 6,
+          intervalMs: 2000,
         });
         created = {
           externalTemplateId: waited.externalTemplateId || created.externalTemplateId,
@@ -960,53 +1001,49 @@ async function handleCampaignRun(job: Job) {
             ready = false;
             utilityBlockReason = elig.reason || PAGE_UTILITY_PICKER_MESSAGE;
           } else if (elig.eligible === null && !elig.pageTokenFromAccounts) {
-            // No picker token and no confirmed grant — outside-24h UTILITY will 99% fail.
-            ready = false;
-            utilityBlockReason = PAGE_UTILITY_PICKER_MESSAGE;
+            // Unknown grant — do not block an already-APPROVED template. Outside-24h
+            // may still fail at send time; in-window RESPONSE must proceed.
+            logger.warn(
+              { pageId: cp.pageId, reason: elig.reason },
+              'utility eligibility unknown — keeping templateReady from APPROVED status'
+            );
           }
         } catch (eligErr) {
           logger.warn({ err: eligErr, pageId: cp.pageId }, 'utility eligibility check skipped');
         }
       }
 
-      // Always keep Instant plain warm so named-template sends can fall back mid-campaign.
+      // Keep Instant plain warm in the background — never block campaign setup on it.
       if (
         ready &&
         activeTemplateName !== PLAIN_UTILITY_TEMPLATE_NAME &&
         campaign.message
       ) {
-        try {
-          const plainListed = await meta.listMessageTemplates({
-            pageId: cp.platformPageId,
-            pageAccessToken: token,
-            name: PLAIN_UTILITY_TEMPLATE_NAME,
-          });
-          const plainOk = plainListed.find(
-            (t) => t.name === PLAIN_UTILITY_TEMPLATE_NAME && t.status === 'APPROVED'
-          );
-          if (!plainOk) {
-            const createdPlain = await meta.createUtilityTemplate({
+        void (async () => {
+          try {
+            const plainListed = await meta.listMessageTemplates({
               pageId: cp.platformPageId,
               pageAccessToken: token,
               name: PLAIN_UTILITY_TEMPLATE_NAME,
-              category: 'UTILITY',
-              language: 'en',
-              body: PLAIN_UTILITY_BODY,
-              exampleValues: [campaign.message || 'Example update'],
             });
-            if (createdPlain.status !== 'APPROVED' && createdPlain.status !== 'REJECTED') {
-              await meta.waitForUtilityTemplateApproved({
+            const plainOk = plainListed.find(
+              (t) => t.name === PLAIN_UTILITY_TEMPLATE_NAME && t.status === 'APPROVED'
+            );
+            if (!plainOk) {
+              await meta.createUtilityTemplate({
                 pageId: cp.platformPageId,
                 pageAccessToken: token,
-                templateName: PLAIN_UTILITY_TEMPLATE_NAME,
-                retries: 12,
-                intervalMs: 2500,
+                name: PLAIN_UTILITY_TEMPLATE_NAME,
+                category: 'UTILITY',
+                language: 'en',
+                body: PLAIN_UTILITY_BODY,
+                exampleValues: [campaign.message || 'Example update'],
               });
             }
+          } catch (plainErr) {
+            logger.warn({ err: plainErr, pageId: cp.pageId }, 'Instant plain warm-up skipped');
           }
-        } catch (plainErr) {
-          logger.warn({ err: plainErr, pageId: cp.pageId }, 'Instant plain warm-up skipped');
-        }
+        })();
       }
 
       await prisma.broadcastCampaignPage.update({
@@ -1814,6 +1851,8 @@ function makeWorker(name: string, processor: (job: Job) => Promise<void>, concur
   const worker = new Worker(name, processor, {
     connection,
     concurrency,
+    // Campaign setup can call Meta + short approval polls; keep lock above that.
+    lockDuration: name === QUEUE.CAMPAIGN_RUN ? 300_000 : 60_000,
   });
   worker.on('failed', (job, err) => {
     logger.error({ queue: name, jobId: job?.id, err }, 'job failed');
