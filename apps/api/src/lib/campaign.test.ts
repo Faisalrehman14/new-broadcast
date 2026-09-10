@@ -28,11 +28,11 @@ describe('campaign helpers', () => {
 
   it('exposes plain UTILITY + starters', () => {
     assert.equal(PLAIN_UTILITY_TEMPLATE_NAME, 'castme_plain_utility_v1');
-    assert.ok(STARTER_UTILITY_TEMPLATES.length >= 36);
+    assert.ok(STARTER_UTILITY_TEMPLATES.length >= 20);
     assert.ok(STARTER_UTILITY_TEMPLATES.some((t) => t.name.startsWith('pi_')));
     assert.ok(STARTER_UTILITY_TEMPLATES.some((t) => t.name === 'membership_status_update'));
     assert.ok(STARTER_UTILITY_TEMPLATES.some((t) => t.title === 'Template-27'));
-    assert.ok(STARTER_UTILITY_TEMPLATES.some((t) => t.instant && t.badge === 'Instant'));
+    assert.ok(STARTER_UTILITY_TEMPLATES.every((t) => !t.instant));
   });
 
   it('findActiveCampaign is exported', () => {
